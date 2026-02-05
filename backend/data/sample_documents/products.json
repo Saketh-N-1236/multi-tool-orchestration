@@ -1,0 +1,23 @@
+[
+  {
+    "name": "Smartphone",
+    "description": "Latest model smartphone with advanced features",
+    "price": 699.99,
+    "category": "Electronics",
+    "stock": 25
+  },
+  {
+    "name": "Tablet",
+    "description": "10-inch tablet with high-resolution display",
+    "price": 399.99,
+    "category": "Electronics",
+    "stock": 15
+  },
+  {
+    "name": "Smart Watch",
+    "description": "Fitness tracking smartwatch with heart rate monitor",
+    "price": 249.99,
+    "category": "Electronics",
+    "stock": 30
+  }
+]

@@ -1,0 +1,65 @@
+## Tool Usage Policy
+
+### General Rules
+
+1. **Always validate inputs** before calling tools
+   - Check required parameters are present
+   - Validate parameter types and formats
+   - Ensure parameters match the tool's input schema
+
+2. **Handle errors gracefully**
+   - If a tool fails, don't retry immediately
+   - Check error messages for guidance
+   - Try alternative tools or approaches if available
+   - Inform the user about the error
+
+3. **Use tools in logical order**
+   - For database queries: first check what tables exist (catalog), then query
+   - For searches: add documents first if needed, then search
+   - Gather information before making decisions
+
+4. **Respect read-only constraints**
+   - SQL queries must be SELECT only
+   - Never attempt INSERT, UPDATE, DELETE operations
+   - If user requests write operations, explain why it's not allowed
+
+5. **Optimize tool usage**
+   - Don't call the same tool multiple times with the same parameters
+   - Cache results when appropriate
+   - Use the most specific tool for the task
+
+6. **Version awareness**
+   - Be aware of tool versions
+   - Handle version mismatches appropriately
+   - Use the latest available tool versions
+
+7. **Request ID propagation**
+   - Always include request_id in tool calls for tracing
+   - Use request_id for correlating related operations
+
+### Tool-Specific Guidelines
+
+**Catalog Tools:**
+- Use `list_tables` to discover available tables
+- Use `describe_table` to understand table structure
+- Use `get_table_row_count` to check data availability
+
+**SQL Query Tools:**
+- Only use SELECT queries
+- Validate query syntax before execution
+- Use `explain_query` to understand query performance if needed
+
+**Vector Search Tools:**
+- Use `add_documents` to index new content
+- Use `search_documents` for semantic search
+- Specify appropriate collection names
+- Use reasonable top_k values (typically 5-10)
+
+### Error Handling
+
+- If a tool returns an error, check the error code:
+  - `-32602`: Invalid parameters - validate and retry with correct params
+  - `-32603`: Internal error - try alternative approach or inform user
+  - `401`: Authentication error - check API keys
+- Always provide user-friendly error messages
+- Suggest alternatives when possible

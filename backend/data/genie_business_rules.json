@@ -1,0 +1,32 @@
+{
+  "definitions": {
+    "under-performing": {
+      "description": "Products with sales below average",
+      "sql_pattern": "WHERE sales < (SELECT AVG(sales) FROM products)",
+      "metric": "sales"
+    },
+    "likely_to_churn": {
+      "description": "Customers with no activity in last 30 days",
+      "sql_pattern": "WHERE last_activity_date < DATE('now', '-30 days')",
+      "metric": "last_activity_date"
+    },
+    "high_value": {
+      "description": "Items with value above 80th percentile",
+      "sql_pattern": "WHERE value > (SELECT value FROM items ORDER BY value LIMIT 1 OFFSET (SELECT COUNT(*) * 0.8 FROM items))",
+      "metric": "value"
+    }
+  },
+  "metrics": {
+    "customer_lifetime_value": {
+      "description": "Sum of all order values for a customer",
+      "calculation": "SUM(order_value)",
+      "table": "orders",
+      "group_by": "customer_id"
+    },
+    "average_order_value": {
+      "description": "Average value of orders",
+      "calculation": "AVG(order_value)",
+      "table": "orders"
+    }
+  }
+}

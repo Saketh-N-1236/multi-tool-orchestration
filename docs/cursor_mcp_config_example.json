@@ -1,0 +1,28 @@
+{
+  "mcpServers": {
+    "catalog": {
+      "command": "python",
+      "args": [
+        "-m",
+        "mcp_servers.catalog_server.stdio_server"
+      ],
+      "cwd": "/absolute/path/to/backend"
+    },
+    "sql_query": {
+      "command": "python",
+      "args": [
+        "-m",
+        "mcp_servers.sql_query_server.stdio_server"
+      ],
+      "cwd": "/absolute/path/to/backend"
+    },
+    "vector_search": {
+      "command": "python",
+      "args": [
+        "-m",
+        "mcp_servers.vector_search_server.stdio_server"
+      ],
+      "cwd": "/absolute/path/to/backend"
+    }
+  }
+}

@@ -6,23 +6,34 @@ A LangGraph agent that connects to MCP (Model Context Protocol) servers for mult
 
 All documentation is organized in the [`docs/`](docs/) folder:
 
-- **[Project Overview](docs/guides/understanding.md)** - Architecture and design
-- **[Installation Guide](docs/guides/installation_notes.md)** - Setup instructions
-- **[Hybrid Embeddings Guide](docs/guides/hybrid_embeddings.md)** - Using Ollama and Gemini embeddings
-- **[Implementation Status](docs/implementation/implementation_status.md)** - Current progress
-- **[Documentation Index](docs/README.md)** - Complete documentation index
+- **[Project Overview](docs/guides/understanding.md)** - Complete architecture and project structure
+- **[High-Level Design](docs/guides/hld.md)** - System architecture and design
+- **[Inference Logging & MLflow](docs/guides/hld_inference_mlflow.puml)** - Architecture diagram
 
 ## 🚀 Quick Start
 
+### Backend Setup
+
 1. **Install dependencies**: `pip install -r requirements.txt`
-2. **Configure**: Copy `.env.example` to `.env` and add your API keys
-3. **Setup data**: Run `python scripts/setup_data.py`
-4. **Start servers**: 
+2. **Configure**: Copy `.env.example` to `.env` and add your API keys (Gemini API key required)
+3. **Navigate to backend**: `cd backend`
+4. **Setup data**: Run `python scripts/setup_data.py`
+5. **Start servers** (from backend directory): 
    - `python -m mcp_servers.catalog_server.server` (Terminal 1)
    - `python -m mcp_servers.sql_query_server.server` (Terminal 2)
-5. **Test**: Run `python examples/test_mcp_servers.py`
+   - `python -m mcp_servers.vector_search_server.server` (Terminal 3)
+6. **Start API server**: `python -m api.main` (Terminal 4)
+7. **Test servers**: Run `python tests/test_mcp_servers.py`
+8. **Test agent**: Run `python tests/test_agent.py`
 
-See [Phase 1 Quick Start Guide](docs/guides/phase1_quickstart.md) for detailed instructions.
+### Frontend Setup
+
+1. **Navigate to frontend**: `cd frontend`
+2. **Install dependencies**: `npm install`
+3. **Start development server**: `npm run dev`
+4. **Open browser**: Navigate to `http://localhost:3000`
+
+See [Project Overview](docs/guides/understanding.md) for detailed documentation.
 
 ## ✨ Features
 
@@ -31,21 +42,35 @@ See [Phase 1 Quick Start Guide](docs/guides/phase1_quickstart.md) for detailed i
 - ✅ **Client-Server Architecture**: HTTP-based MCP servers
 - ✅ **Versioning**: Tool and server versioning support
 - ✅ **Authentication**: API key-based authentication
-- ✅ **MCP Servers**: Catalog and SQL Query servers (Phase 1 complete)
+- ✅ **MCP Servers**: All 3 servers complete (Catalog, SQL Query, Vector Search)
 - ✅ **MCP Client**: HTTP client with concurrency control
 - ✅ **Tool Discovery**: Automatic tool discovery from MCP servers
+- ✅ **Agent System**: LLM-powered agent with tool orchestration (Phase 2 complete)
+- ✅ **Prompt Versioning**: Versioned prompts for tracking and experimentation
+- ✅ **Frontend UI**: React + Vite frontend with chat, analytics, documents, and tools pages
+- ✅ **Inference Logging**: Comprehensive logging of all API requests and responses
+- ✅ **MLflow Integration**: Experiment tracking and AI-driven evaluation
+- ✅ **Analytics Dashboard**: Real-time monitoring and visualization
 
 ## 📁 Project Structure
 
 ```
 multi_tool_orchestration/
+├── frontend/                # React + Vite frontend application
+├── backend/                 # Backend Python application
+│   ├── api/                 # FastAPI backend
+│   ├── agent/               # LangGraph agent
+│   ├── mcp_servers/         # MCP servers
+│   ├── llm/                 # LLM provider abstraction
+│   ├── config/              # Configuration
+│   ├── analytics/           # Analytics aggregation
+│   ├── inference_logging/   # Inference logging
+│   ├── mlflow/              # MLflow integration
+│   ├── scripts/             # Utility scripts
+│   ├── tests/               # Test suite
+│   └── data/                # Data files and databases
 ├── docs/                    # All documentation
-├── llm/                     # LLM provider abstraction
-├── config/                  # Configuration
-├── agent/                   # LangGraph agent (to be implemented)
-├── mcp_servers/             # MCP servers (to be implemented)
-├── examples/                # Usage examples
-└── tests/                   # Test suite
+└── requirements.txt         # Python dependencies
 ```
 
 See [docs/guides/understanding.md](docs/guides/understanding.md) for complete project structure.

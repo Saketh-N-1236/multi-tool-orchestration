@@ -377,7 +377,7 @@ Phase 3: FastAPI Deployment (Day 6)
 3. **Inference logging middleware**
    - File: `api/middleware.py`
    - Log with request_id
-   - File: `logging/inference_logger.py`
+   - File: `inference_logging/inference_logger.py`
    - Include request_id in logs
 
 4. **Rate limiting**
