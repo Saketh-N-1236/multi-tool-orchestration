@@ -1,12 +1,13 @@
 """API routes for agent queries."""
 
 from fastapi import APIRouter, Request, HTTPException, Depends, UploadFile, File, Query
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 import uuid
 import json
 import logging
+from datetime import datetime
 from io import BytesIO
 
 # LangGraph imports (required - we're using LangGraph only)
@@ -526,6 +527,135 @@ async def chat(
                 logger.debug(f"Exited MLflow context for request: {request_id}")
             except Exception as e:
                 logger.warning(f"Error closing MLflow context: {e}")
+
+
+@router.post("/chat/stream")
+async def chat_stream(
+    request_body: ChatRequest,
+    request: Request,
+    request_id: str = Depends(get_request_id)
+):
+    """Stream chat endpoint with real-time execution stages.
+    
+    This endpoint streams execution progress using Server-Sent Events (SSE),
+    providing real-time updates on agent execution stages.
+    
+    Args:
+        request_body: Chat request
+        request: FastAPI request
+        request_id: Request ID from middleware
+        
+    Returns:
+        StreamingResponse with SSE events containing execution stages
+    """
+    # Store request body data in request.state for middleware logging
+    setattr(request.state, "body_data", {
+        "message": request_body.message,
+        "session_id": request_body.session_id,
+        "max_iterations": request_body.max_iterations,
+        "temperature": request_body.temperature,
+        "max_tokens": request_body.max_tokens
+    })
+    
+    async def generate_stream():
+        """Generate SSE stream of execution stages."""
+        stages_yielded = 0
+        final_tool_calls = None
+        final_tool_results = None
+        final_iterations = None
+        final_response = None
+        
+        try:
+            # Get singleton agent instance
+            agent = await get_agent()
+            logger.info(f"Starting stream for request_id: {request_id}, message: {request_body.message[:50]}...")
+            
+            # Stream agent execution
+            async for stage_info in agent.stream_invoke(
+                user_message=request_body.message,
+                request_id=request_id,
+                session_id=request_body.session_id or str(uuid.uuid4()),
+                max_iterations=request_body.max_iterations,
+                temperature=request_body.temperature,
+                max_tokens=request_body.max_tokens
+            ):
+                stages_yielded += 1
+                logger.debug(f"Yielding stage #{stages_yielded}: {stage_info.get('stage')}")
+                
+                # Capture tool information from completed stage
+                if stage_info.get("stage") == "completed":
+                    stage_data = stage_info.get("data", {})
+                    final_tool_calls = stage_data.get("tool_calls")
+                    final_tool_results = stage_data.get("tool_results")
+                    final_iterations = stage_data.get("iterations")
+                    final_response = stage_data.get("response")
+                    
+                    # Store in request.state for middleware to pick up
+                    if final_tool_calls is not None:
+                        setattr(request.state, "tool_calls", final_tool_calls)
+                    if final_tool_results is not None:
+                        setattr(request.state, "tool_results", final_tool_results)
+                    if final_iterations is not None:
+                        setattr(request.state, "iterations", final_iterations)
+                    if final_response is not None:
+                        setattr(request.state, "answer", final_response)
+                    # Store question
+                    setattr(request.state, "question", request_body.message)
+                
+                # Send stage update as SSE event
+                yield f"data: {json.dumps(stage_info)}\n\n"
+            
+            logger.info(f"Stream completed. Total stages yielded: {stages_yielded}")
+            
+            # Ensure tool information is stored even if completed stage wasn't captured
+            if final_tool_calls is not None:
+                setattr(request.state, "tool_calls", final_tool_calls)
+            if final_tool_results is not None:
+                setattr(request.state, "tool_results", final_tool_results)
+            if final_iterations is not None:
+                setattr(request.state, "iterations", final_iterations)
+            if final_response is not None:
+                setattr(request.state, "answer", final_response)
+            setattr(request.state, "question", request_body.message)
+            
+            # If no stages were yielded, send an error
+            if stages_yielded == 0:
+                logger.error("No stages were yielded from agent.stream_invoke")
+                error_info = {
+                    "stage": "error",
+                    "data": {
+                        "error": "No execution stages received",
+                        "message": "The agent did not produce any execution stages. Please check the logs for details."
+                    },
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+                yield f"data: {json.dumps(error_info)}\n\n"
+            
+        except Exception as e:
+            logger.error(f"Error in streaming chat: {e}", exc_info=True)
+            error_info = {
+                "stage": "error",
+                "data": {
+                    "error": str(e),
+                    "message": f"Error occurred: {str(e)}"
+                },
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            yield f"data: {json.dumps(error_info)}\n\n"
+        
+        finally:
+            # Send end marker
+            yield "data: [DONE]\n\n"
+    
+    return StreamingResponse(
+        generate_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
 
 
 @router.get("/health", response_model=HealthResponse)

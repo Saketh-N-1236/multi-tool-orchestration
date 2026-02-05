@@ -139,16 +139,22 @@ def setup_middleware(app: FastAPI):
                     question = None
                     answer = None
                     
-                    # For chat endpoint, extract question from request body and answer from response
-                    if request.url.path == "/api/v1/chat":
+                    # For chat and chat/stream endpoints, extract question from request body and answer from response
+                    if request.url.path in ["/api/v1/chat", "/api/v1/chat/stream"]:
                         # Get question from request state (set by chat endpoint)
                         question = getattr(request.state, "question", None)
                         if not question:
                             # Fallback: try to get from request body data
                             question = request_body_data.get("message") if request_body_data else None
                         
-                        # Get answer from response body (if available)
+                        # Get answer from request state (set by endpoint)
                         answer = getattr(request.state, "answer", None)
+                        
+                        # Add question and answer to metadata
+                        if question:
+                            metadata["question"] = question
+                        if answer:
+                            metadata["answer"] = answer
                     
                     # Log the request (always log, even if metadata is empty)
                     await inference_logger.log_request(
@@ -190,11 +196,17 @@ def setup_middleware(app: FastAPI):
                 try:
                     # Extract question for error logging (if available)
                     question = None
+                    error_metadata = {}
+                    
                     if request.url.path == "/api/v1/chat":
                         request_body_data = getattr(request.state, "body_data", None)
                         question = getattr(request.state, "question", None) or (
                             request_body_data.get("message") if request_body_data else None
                         )
+                        
+                        # Add question to error metadata
+                        if question:
+                            error_metadata["question"] = question
                     
                     await inference_logger.log_error(
                         request_id=request_id,
@@ -203,7 +215,8 @@ def setup_middleware(app: FastAPI):
                         error=str(e),
                         duration=duration,
                         question=question,
-                        answer=None  # No answer for errors
+                        answer=None,  # No answer for errors
+                        metadata=error_metadata if error_metadata else None
                     )
                 except Exception as log_error:
                     # Don't fail the request if logging fails

@@ -351,3 +351,64 @@
   color: #c33;
   background: #fee;
 }
+
+/* Execution Stage Styles */
+.execution-stage {
+  background: #f0f7ff;
+  border-left: 3px solid #007bff;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.8;
+  }
+}
+
+.execution-stage .message-content {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.stage-info {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+}
+
+.stage-label {
+  font-weight: 600;
+  color: #007bff;
+  font-size: 14px;
+}
+
+.stage-message {
+  color: #666;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.tools-list {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.tool-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #e3f2fd;
+  color: #1976d2;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid #bbdefb;
+}

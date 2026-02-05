@@ -138,7 +138,8 @@ class Settings(BaseSettings):
     
     # Concurrency
     max_parallel_mcp_calls: int = 5
-    mcp_call_timeout: int = 30
+    mcp_call_timeout: int = 60  # Increased from 30 to 60 seconds for slower connections
+    mcp_connect_timeout: int = 10  # Connection timeout in seconds
     
     # Logging
     log_level: str = "INFO"

@@ -199,27 +199,132 @@ def convert_langgraph_state_to_agent(langgraph_state: LangGraphAgentState) -> Ag
     # Extract tool_calls from messages if not already in state
     # This ensures we capture all tool calls made during execution
     tool_calls = langgraph_state.get("tool_calls", [])
+    
+    # Always extract from original LangChain messages first (more reliable)
+    # Then supplement with converted messages if needed
+    from langchain_core.messages import AIMessage
+    from datetime import datetime
+    
+    # Extract from original LangChain AIMessages (most reliable source)
+    for langchain_msg in langchain_messages:
+        if isinstance(langchain_msg, AIMessage) and hasattr(langchain_msg, "tool_calls") and langchain_msg.tool_calls:
+            for tc in langchain_msg.tool_calls:
+                # Handle both dict and object formats
+                tool_name = None
+                tool_id = None
+                tool_args = {}
+                
+                if isinstance(tc, dict):
+                    tool_name = tc.get("name") or tc.get("tool_name") or ""
+                    tool_id = tc.get("id") or tc.get("tool_call_id") or ""
+                    tool_args = tc.get("args") or tc.get("arguments") or {}
+                else:
+                    # Object format
+                    tool_name = getattr(tc, "name", None) or getattr(tc, "tool_name", None) or ""
+                    tool_id = getattr(tc, "id", None) or getattr(tc, "tool_call_id", None) or ""
+                    tool_args = getattr(tc, "args", None) or getattr(tc, "arguments", None) or {}
+                
+                # Only add if we have a tool name or ID
+                if tool_name or tool_id:
+                    # Check if this tool call is already in the list (avoid duplicates)
+                    existing = any(
+                        (tc_item.get("id") == tool_id and tool_id) or 
+                        (tc_item.get("tool_name") == tool_name and tool_name)
+                        for tc_item in tool_calls
+                    )
+                    if not existing:
+                        # Get current step from state
+                        current_step = langgraph_state.get("current_step", 0)
+                        tool_calls.append({
+                            "tool_name": tool_name,
+                            "name": tool_name,  # Alias
+                            "params": tool_args if isinstance(tool_args, dict) else {},
+                            "arguments": tool_args if isinstance(tool_args, dict) else {},  # Alias
+                            "id": tool_id,
+                            "timestamp": datetime.utcnow().isoformat(),
+                            "step": current_step  # Required by frontend interface
+                        })
+    
+    # If still no tool_calls, try extracting from converted messages as fallback
     if not tool_calls:
-        # Extract tool_calls from AIMessages in the converted messages
-        # Include ALL tool calls, even duplicates/retries (important for matching)
         for msg in custom_messages:
             if msg.get("role") == "assistant" and "tool_calls" in msg:
                 for tc in msg.get("tool_calls", []):
-                    # Add ALL tool calls, including duplicates/retries
+                    # Add ALL tool calls, even duplicates/retries (important for matching)
                     tool_name = tc.get("tool_name") or tc.get("name") or ""
                     tool_id = tc.get("id") or ""
                     if tool_name or tool_id:  # Add if we have either name or ID
+                        # Get current step from state
+                        current_step = langgraph_state.get("current_step", 0)
                         tool_calls.append({
                             "tool_name": tool_name,
                             "name": tool_name,  # Alias
                             "params": tc.get("args") or tc.get("arguments") or {},
                             "arguments": tc.get("args") or tc.get("arguments") or {},  # Alias
                             "id": tool_id,
-                            "timestamp": None  # Will be set if available
+                            "timestamp": datetime.utcnow().isoformat(),
+                            "step": current_step  # Required by frontend interface
                         })
     
     # Extract tool_results from ToolMessages
     tool_results = langgraph_state.get("tool_results", [])
+    
+    # Always extract from original LangChain ToolMessages first (more reliable)
+    from langchain_core.messages import ToolMessage
+    
+    # Extract from original LangChain ToolMessages
+    for langchain_msg in langchain_messages:
+        if isinstance(langchain_msg, ToolMessage):
+            tool_call_id = langchain_msg.tool_call_id
+            content = normalize_message_content(langchain_msg.content)
+            
+            # Try to find corresponding tool call to get tool name
+            tool_name = "unknown"
+            
+            # Strategy 1: Try to match from tool_calls list we just extracted
+            for tc in tool_calls:
+                if tc.get("id") == tool_call_id:
+                    tool_name = tc.get("tool_name") or tc.get("name") or "unknown"
+                    break
+            
+            # Strategy 2: If not found, search through original LangChain AIMessages
+            if tool_name == "unknown":
+                for aimsg in langchain_messages:
+                    if isinstance(aimsg, AIMessage) and hasattr(aimsg, "tool_calls") and aimsg.tool_calls:
+                        for tc in aimsg.tool_calls:
+                            # Handle both dict and object formats
+                            tc_id = None
+                            tc_name = None
+                            
+                            if isinstance(tc, dict):
+                                tc_id = tc.get("id") or tc.get("tool_call_id")
+                                tc_name = tc.get("name") or tc.get("tool_name")
+                            else:
+                                tc_id = getattr(tc, "id", None) or getattr(tc, "tool_call_id", None)
+                                tc_name = getattr(tc, "name", None) or getattr(tc, "tool_name", None)
+                            
+                            if tc_id == tool_call_id and tc_name:
+                                tool_name = tc_name
+                                break
+                    
+                    if tool_name != "unknown":
+                        break
+            
+            # Add tool result (avoid duplicates)
+            existing = any(tr.get("tool_call_id") == tool_call_id for tr in tool_results)
+            if not existing:
+                # Get current step from state
+                current_step = langgraph_state.get("current_step", 0)
+                tool_results.append({
+                    "tool_name": tool_name,
+                    "result": content,
+                    "error": None,
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "tool_call_id": tool_call_id,
+                    "step": current_step  # Required by frontend interface
+                })
+    
+    # If still no tool_results, try extracting from converted messages as fallback
     if not tool_results:
         # Extract tool results from ToolMessages in the converted messages
         for msg in custom_messages:
@@ -292,11 +397,14 @@ def convert_langgraph_state_to_agent(langgraph_state: LangGraphAgentState) -> Ag
                                 if tool_name != "unknown":
                                     break
                 
+                # Get current step from state
+                current_step = langgraph_state.get("current_step", 0)
                 tool_results.append({
                     "tool_name": tool_name,
                     "result": content,
                     "error": None,
-                    "timestamp": None
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "step": current_step  # Required by frontend interface
                 })
     
     return AgentState(

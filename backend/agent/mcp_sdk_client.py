@@ -101,6 +101,7 @@ class MCPSDKClient:
         self.settings = get_settings()
         self.max_parallel = max_parallel or self.settings.max_parallel_mcp_calls
         self.timeout = timeout or self.settings.mcp_call_timeout
+        self.connect_timeout = getattr(self.settings, 'mcp_connect_timeout', 10)
         self.semaphore = Semaphore(self.max_parallel)
         
         # Server configuration: server_name -> server_url (SSE endpoint)
@@ -221,26 +222,76 @@ class MCPSDKClient:
                 
                 logger.info(f"Connecting to MCP server '{server_name}' at {server_url}...")
                 
-                # Use official MCP SDK SSE transport
+                # Use official MCP SDK SSE transport with retry logic
                 # Note: sse_client may not support timeout parameter directly
                 # Connection timeout is handled by httpx internally
-                async with sse_client(server_url) as (read, write):
-                    async with ClientSession(read, write) as session:
-                        await session.initialize()
+                # Add retry logic for connection issues
+                max_retries = 2
+                last_error = None
+                
+                for attempt in range(max_retries + 1):
+                    try:
+                        async with sse_client(server_url) as (read, write):
+                            async with ClientSession(read, write) as session:
+                                await session.initialize()
+                                
+                                # Use official MCP SDK method to list tools
+                                tools_response = await session.list_tools()
+                                tools = tools_response.tools
+                                
+                                # Cache in both instance and global cache
+                                self._tool_cache[server_name] = tools
+                                set_cached_tools(server_name, tools)
+                                
+                                logger.info(
+                                    f"Successfully discovered {len(tools)} tools from server '{server_name}' via SSE"
+                                )
+                                
+                                return tools
+                    except ExceptionGroup as eg:
+                        # Unwrap ExceptionGroup to check if it's a connection error
+                        actual_exc = None
+                        if hasattr(eg, 'exceptions') and len(eg.exceptions) > 0:
+                            actual_exc = eg.exceptions[0]
                         
-                        # Use official MCP SDK method to list tools
-                        tools_response = await session.list_tools()
-                        tools = tools_response.tools
-                        
-                        # Cache in both instance and global cache
-                        self._tool_cache[server_name] = tools
-                        set_cached_tools(server_name, tools)
-                        
-                        logger.info(
-                            f"Successfully discovered {len(tools)} tools from server '{server_name}' via SSE"
-                        )
-                        
-                        return tools
+                        # Check if it's a connection-related error
+                        if isinstance(actual_exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException)):
+                            last_error = actual_exc
+                            if attempt < max_retries:
+                                wait_time = (attempt + 1) * 2  # Exponential backoff: 2s, 4s
+                                logger.warning(
+                                    f"Connection attempt {attempt + 1}/{max_retries + 1} failed for '{server_name}'. "
+                                    f"Retrying in {wait_time}s... Error: {type(actual_exc).__name__}"
+                                )
+                                await asyncio.sleep(wait_time)
+                                continue
+                            else:
+                                # All retries exhausted, re-raise as ConnectionError
+                                error_msg = (
+                                    f"Cannot connect to MCP server '{server_name}' at {server_url}. "
+                                    f"Make sure the server is running. Error: {type(actual_exc).__name__}"
+                                )
+                                raise ConnectionError(error_msg) from actual_exc
+                        else:
+                            # Not a connection error, re-raise the ExceptionGroup
+                            raise
+                    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as e:
+                        last_error = e
+                        if attempt < max_retries:
+                            wait_time = (attempt + 1) * 2  # Exponential backoff: 2s, 4s
+                            logger.warning(
+                                f"Connection attempt {attempt + 1}/{max_retries + 1} failed for '{server_name}'. "
+                                f"Retrying in {wait_time}s... Error: {type(e).__name__}"
+                            )
+                            await asyncio.sleep(wait_time)
+                            continue
+                        else:
+                            # All retries exhausted, re-raise the last error
+                            error_msg = (
+                                f"Cannot connect to MCP server '{server_name}' at {server_url}. "
+                                f"Make sure the server is running. Error: {type(e).__name__}"
+                            )
+                            raise ConnectionError(error_msg) from e
             except ExceptionGroup as eg:
                 # Unwrap ExceptionGroup to get the actual exception
                 # ExceptionGroup is raised by anyio.create_task_group() when sse_client fails
@@ -421,12 +472,21 @@ class MCPSDKClient:
             else:
                 errors[server_name] = "No tools returned"
         
-        # If no tools were discovered from any server, raise an error
+        # If no tools were discovered from any server, raise an error with diagnostic info
         if not all_tools:
             error_summary = "; ".join([f"{name}: {err}" for name, err in errors.items()])
+            
+            # Add diagnostic information
+            diagnostic_info = []
+            for server_name, server_url in self.server_configs.items():
+                diagnostic_info.append(f"  - {server_name}: {server_url}")
+            
             raise RuntimeError(
                 f"Failed to discover tools from any MCP server. "
-                f"Please ensure all MCP servers are running. Errors: {error_summary}"
+                f"Please ensure at least one MCP server is running.\n"
+                f"Errors: {error_summary}\n"
+                f"Configured servers:\n" + "\n".join(diagnostic_info) + "\n"
+                f"To start servers, run: python -m backend.scripts.start_servers"
             )
         
         # Log summary
