@@ -1,0 +1,30 @@
+[
+  {
+    "tool_name": "catalog_search_tables",
+    "name": "catalog_search_tables",
+    "params": {
+      "query": "products"
+    },
+    "arguments": {
+      "query": "products"
+    },
+    "id": "8365c2b5-4380-48c3-ae0b-c56cd5d45f3d",
+    "timestamp": "2026-02-06T15:11:22.719336",
+    "step": 0
+  },
+  {
+    "tool_name": "catalog_describe_table",
+    "name": "catalog_describe_table",
+    "params": {
+      "table_name": "products",
+      "catalog_name": "main"
+    },
+    "arguments": {
+      "table_name": "products",
+      "catalog_name": "main"
+    },
+    "id": "3b794702-9125-496a-8c92-58f1234cb6b3",
+    "timestamp": "2026-02-06T15:11:22.719336",
+    "step": 0
+  }
+]

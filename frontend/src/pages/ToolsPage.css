@@ -316,3 +316,113 @@
   font-size: 16px;
   color: #666;
 }
+
+.tool-section {
+  margin: 16px 0;
+  padding-top: 16px;
+  border-top: 1px solid #f0f0f0;
+}
+
+.tool-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #667eea;
+  margin-bottom: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.tool-parameters {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.tool-parameter {
+  padding: 12px;
+  background: #f9f9f9;
+  border-radius: 6px;
+  border-left: 3px solid #667eea;
+}
+
+.parameter-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+
+.parameter-name {
+  font-weight: 600;
+  color: #333;
+  font-size: 14px;
+}
+
+.parameter-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 500;
+}
+
+.parameter-badge.required {
+  background: #fee2e2;
+  color: #dc2626;
+}
+
+.parameter-badge.optional {
+  background: #e0e7ff;
+  color: #4f46e5;
+}
+
+.parameter-type {
+  font-size: 11px;
+  color: #666;
+  background: #f5f5f5;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-family: 'Courier New', monospace;
+}
+
+.parameter-description {
+  font-size: 13px;
+  color: #666;
+  line-height: 1.4;
+  margin-top: 4px;
+}
+
+.parameter-default {
+  font-size: 12px;
+  color: #999;
+  margin-top: 4px;
+  font-style: italic;
+}
+
+.tool-output {
+  padding: 12px;
+  background: #f0f9ff;
+  border-radius: 6px;
+  border-left: 3px solid #0ea5e9;
+}
+
+.output-type {
+  font-size: 13px;
+  color: #333;
+  margin-bottom: 6px;
+}
+
+.output-type code {
+  background: #e0e7ff;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  color: #4f46e5;
+  font-family: 'Courier New', monospace;
+}
+
+.output-description {
+  font-size: 13px;
+  color: #666;
+  line-height: 1.4;
+}

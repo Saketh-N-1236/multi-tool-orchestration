@@ -1,0 +1,47 @@
+[
+  {
+    "tool_name": "catalog_search_tables",
+    "name": "catalog_search_tables",
+    "params": {
+      "query": "users"
+    },
+    "arguments": {
+      "query": "users"
+    },
+    "id": "fd4f059f-b547-4c0c-b056-cdc71a2e1755",
+    "timestamp": "2026-02-06T11:07:44.249054",
+    "step": 0
+  },
+  {
+    "tool_name": "catalog_describe_table_multi",
+    "name": "catalog_describe_table_multi",
+    "params": {
+      "schema_name": "main",
+      "table_name": "users",
+      "catalog_name": "main"
+    },
+    "arguments": {
+      "schema_name": "main",
+      "table_name": "users",
+      "catalog_name": "main"
+    },
+    "id": "782dfb4d-53e3-4782-b1ec-6365b3c5f807",
+    "timestamp": "2026-02-06T11:07:44.249054",
+    "step": 0
+  },
+  {
+    "tool_name": "sql_query_execute_query",
+    "name": "sql_query_execute_query",
+    "params": {
+      "query": "SELECT name FROM users WHERE age = 25",
+      "database": "main"
+    },
+    "arguments": {
+      "query": "SELECT name FROM users WHERE age = 25",
+      "database": "main"
+    },
+    "id": "81f32b94-99f2-4ce7-b4ab-d32297ca674d",
+    "timestamp": "2026-02-06T11:07:44.249054",
+    "step": 0
+  }
+]

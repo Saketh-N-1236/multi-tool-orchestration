@@ -1,0 +1,24 @@
+[
+  {
+    "tool_name": "vector_search_search_documents",
+    "name": "vector_search_search_documents",
+    "params": {
+      "query": "mcp prompt"
+    },
+    "arguments": {
+      "query": "mcp prompt"
+    },
+    "id": "6781be05-6d31-41d1-862d-515d76cafa88",
+    "timestamp": "2026-02-06T13:22:47.359247",
+    "step": 0
+  },
+  {
+    "tool_name": "catalog_list_catalogs",
+    "name": "catalog_list_catalogs",
+    "params": {},
+    "arguments": {},
+    "id": "4648f1ac-83a3-44ce-9af9-adb703b33494",
+    "timestamp": "2026-02-06T13:22:47.359247",
+    "step": 0
+  }
+]

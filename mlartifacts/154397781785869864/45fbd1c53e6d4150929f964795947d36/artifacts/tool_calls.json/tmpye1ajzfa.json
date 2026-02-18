@@ -1,0 +1,60 @@
+[
+  {
+    "tool_name": "catalog_search_tables",
+    "name": "catalog_search_tables",
+    "params": {
+      "query": "product"
+    },
+    "arguments": {
+      "query": "product"
+    },
+    "id": "f41d6c0e-0d71-4258-abd0-f224d65b20b4",
+    "timestamp": "2026-02-06T13:00:52.749767",
+    "step": 0
+  },
+  {
+    "tool_name": "catalog_describe_table",
+    "name": "catalog_describe_table",
+    "params": {
+      "table_name": "products"
+    },
+    "arguments": {
+      "table_name": "products"
+    },
+    "id": "317f1271-7350-4d3c-a830-34775ef04ed5",
+    "timestamp": "2026-02-06T13:00:52.749767",
+    "step": 0
+  },
+  {
+    "tool_name": "catalog_describe_table_multi",
+    "name": "catalog_describe_table_multi",
+    "params": {
+      "schema_name": "main",
+      "table_name": "products",
+      "catalog_name": "sample_data"
+    },
+    "arguments": {
+      "schema_name": "main",
+      "table_name": "products",
+      "catalog_name": "sample_data"
+    },
+    "id": "f8c03033-ead8-4a4a-b039-b3679b223c14",
+    "timestamp": "2026-02-06T13:00:52.749767",
+    "step": 0
+  },
+  {
+    "tool_name": "sql_query_execute_query",
+    "name": "sql_query_execute_query",
+    "params": {
+      "query": "SELECT name, price FROM products WHERE price < 800",
+      "database": "main"
+    },
+    "arguments": {
+      "query": "SELECT name, price FROM products WHERE price < 800",
+      "database": "main"
+    },
+    "id": "0736338b-0e0c-42e3-897a-fa741c46a870",
+    "timestamp": "2026-02-06T13:00:52.749767",
+    "step": 0
+  }
+]

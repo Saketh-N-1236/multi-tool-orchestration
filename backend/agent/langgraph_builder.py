@@ -6,6 +6,7 @@ for agent execution with tool orchestration.
 
 import logging
 from typing import Optional, Dict, Any
+from pathlib import Path
 
 try:
     from langgraph.graph import StateGraph, END
@@ -19,6 +20,7 @@ except ImportError:
 
 from agent.langgraph_state import LangGraphAgentState
 from agent.langgraph_nodes import call_model, should_continue, set_available_tools
+from config.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -82,13 +84,22 @@ class LangGraphAgentBuilder:
         # Add edge from tools back to agent
         workflow.add_edge("tools", "agent")
         
-        # Compile the graph
-        self._graph = workflow.compile()
+        # Create checkpointer for conversation history persistence
+        checkpointer = self._create_checkpointer()
         
-        logger.info(
-            f"Built LangGraph with {len(self.tools)} tools. "
-            f"Graph structure: agent -> [tools/end] -> agent (loop)"
-        )
+        # Compile the graph with checkpointer
+        if checkpointer:
+            self._graph = workflow.compile(checkpointer=checkpointer)
+            logger.info(
+                f"Built LangGraph with {len(self.tools)} tools and checkpointing enabled. "
+                f"Graph structure: agent -> [tools/end] -> agent (loop)"
+            )
+        else:
+            self._graph = workflow.compile()
+            logger.warning(
+                f"Built LangGraph with {len(self.tools)} tools but checkpointing is disabled. "
+                f"Conversation history will not persist across requests."
+            )
         
         # Optionally visualize the graph (non-blocking, doesn't affect execution)
         self._visualize_graph_if_enabled()
@@ -146,6 +157,51 @@ class LangGraphAgentBuilder:
         except Exception as e:
             # Silently fail - visualization is optional and shouldn't break execution
             logger.debug(f"Graph visualization error (non-critical): {e}")
+    
+    def _create_checkpointer(self):
+        """Create a checkpointer for conversation history persistence.
+        
+        Returns:
+            Checkpointer instance or None if checkpointing is not available
+        """
+        try:
+            settings = get_settings()
+            checkpoint_path = Path(settings.checkpoint_db_path)
+            
+            # Ensure parent directory exists
+            checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Try to use SqliteSaver for persistent checkpointing
+            try:
+                from langgraph.checkpoint.sqlite import SqliteSaver
+                checkpointer = SqliteSaver.from_conn_string(str(checkpoint_path))
+                logger.info(f"Created SqliteSaver checkpointer at {checkpoint_path}")
+                return checkpointer
+            except ImportError as import_err:
+                # Fallback to MemorySaver if SqliteSaver is not available
+                logger.warning(
+                    f"SqliteSaver not available ({import_err}), falling back to MemorySaver. "
+                    "Conversation history will not persist across server restarts."
+                )
+            except Exception as e:
+                # If SqliteSaver import succeeded but creation failed, log and fallback
+                logger.warning(
+                    f"Failed to create SqliteSaver checkpointer: {e}. "
+                    "Falling back to MemorySaver. Conversation history will not persist across server restarts."
+                )
+            
+            # Fallback to MemorySaver if SqliteSaver failed
+            try:
+                from langgraph.checkpoint.memory import MemorySaver
+                checkpointer = MemorySaver()
+                logger.info("Created MemorySaver checkpointer (in-memory only)")
+                return checkpointer
+            except ImportError:
+                logger.error("Neither SqliteSaver nor MemorySaver available. Checkpointing disabled.")
+                return None
+        except Exception as e:
+            logger.error(f"Failed to create checkpointer: {e}", exc_info=True)
+            return None
     
     def get_graph_image(self) -> Optional[bytes]:
         """Get the graph visualization as PNG bytes.

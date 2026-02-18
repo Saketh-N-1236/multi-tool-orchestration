@@ -26,7 +26,7 @@
 5. **Optimize tool usage**
    - Don't call the same tool multiple times with the same parameters
    - Cache results when appropriate
-   - Use the most specific tool for the task
+   - Use  the most specific tool for the task
 
 6. **Version awareness**
    - Be aware of tool versions

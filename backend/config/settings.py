@@ -148,6 +148,9 @@ class Settings(BaseSettings):
     # Inference Logging
     inference_log_db_path: str = "data/inference_logs.db"
     
+    # LangGraph Checkpointing (for conversation history persistence)
+    checkpoint_db_path: str = "data/checkpoints.db"  # SQLite database for checkpoint storage
+    
     # Agent Implementation Selection
     # Always using LangGraph + MCP SDK (custom implementation removed)
     # This setting is kept for backward compatibility but always True

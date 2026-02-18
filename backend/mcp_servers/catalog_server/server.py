@@ -33,33 +33,79 @@ class CatalogMCPServer(BaseMCPServer):
     def _register_tools(self):
         """Register tools with FastMCP."""
         
-        # Existing tools (backward compatible)
+        # Unified tools (backward compatible + multi-catalog support)
         @self.mcp.add_tool
-        async def list_tables() -> Dict[str, Any]:
-            """List all tables in the database.
+        async def list_tables(
+            catalog_name: Optional[str] = None,
+            schema_name: Optional[str] = None
+        ) -> Dict[str, Any]:
+            """List tables in database/catalog.
             
-            Returns:
-                Dictionary with tables list and count
-            """
-            tables = await self.db.list_tables()
-            return {
-                "tables": tables,
-                "count": len(tables)
-            }
-        
-        @self.mcp.add_tool
-        async def describe_table(table_name: str) -> Dict[str, Any]:
-            """Get schema information for a specific table.
+            Supports both single database (backward compatible) and multi-catalog modes.
             
             Args:
-                table_name: Name of the table to describe
-                
+                catalog_name: Optional catalog name (defaults to main database if not provided)
+                schema_name: Optional schema name (defaults to "main" for SQLite if not provided)
+            
             Returns:
-                Dictionary with table schema information
+                Dictionary with tables list and count. If catalog_name is provided,
+                includes catalog and schema information.
+            """
+            if catalog_name:
+                # Multi-catalog mode: use catalog_manager
+                if not schema_name:
+                    schemas = await self.catalog_manager.list_schemas(catalog_name)
+                    schema_name = schemas[0] if schemas else "main"
+                
+                tables = await self.catalog_manager.list_tables(catalog_name, schema_name)
+                return {
+                    "catalog": catalog_name,
+                    "schema": schema_name,
+                    "tables": tables,
+                    "count": len(tables)
+                }
+            else:
+                # Backward compatible mode: use default database
+                tables = await self.db.list_tables()
+                return {
+                    "tables": tables,
+                    "count": len(tables)
+                }
+        
+        @self.mcp.add_tool
+        async def describe_table(
+            table_name: str,
+            catalog_name: Optional[str] = None,
+            schema_name: Optional[str] = None
+        ) -> Dict[str, Any]:
+            """Get schema information for a table.
+            
+            Supports both single database (backward compatible) and multi-catalog modes.
+            
+            Args:
+                table_name: Name of the table to describe (required)
+                catalog_name: Optional catalog name (defaults to main database if not provided)
+                schema_name: Optional schema name (defaults to "main" for SQLite if not provided)
+            
+            Returns:
+                Dictionary with table schema information. If catalog_name is provided,
+                includes catalog and schema information.
             """
             if not table_name:
                 raise ValueError("table_name parameter is required")
-            return await self.db.describe_table(table_name)
+            
+            if catalog_name:
+                # Multi-catalog mode: use catalog_manager
+                if not schema_name:
+                    schemas = await self.catalog_manager.list_schemas(catalog_name)
+                    schema_name = schemas[0] if schemas else "main"
+                
+                return await self.catalog_manager.describe_table(
+                    catalog_name, schema_name, table_name
+                )
+            else:
+                # Backward compatible mode: use default database
+                return await self.db.describe_table(table_name)
         
         @self.mcp.add_tool
         async def get_table_row_count(table_name: str) -> Dict[str, Any]:
@@ -111,63 +157,6 @@ class CatalogMCPServer(BaseMCPServer):
                 "schemas": schemas,
                 "count": len(schemas)
             }
-        
-        @self.mcp.add_tool
-        async def list_tables_multi(
-            catalog_name: str,
-            schema_name: Optional[str] = None
-        ) -> Dict[str, Any]:
-            """List tables in a catalog/schema (Unity Catalog-like).
-            
-            Args:
-                catalog_name: Name of the catalog
-                schema_name: Optional schema name (defaults to "main" for SQLite)
-                
-            Returns:
-                Dictionary with tables list and count
-            """
-            if not catalog_name:
-                raise ValueError("catalog_name parameter is required")
-            
-            # Default to "main" schema if not provided
-            if not schema_name:
-                schemas = await self.catalog_manager.list_schemas(catalog_name)
-                schema_name = schemas[0] if schemas else "main"
-            
-            tables = await self.catalog_manager.list_tables(catalog_name, schema_name)
-            return {
-                "catalog": catalog_name,
-                "schema": schema_name,
-                "tables": tables,
-                "count": len(tables)
-            }
-        
-        @self.mcp.add_tool
-        async def describe_table_multi(
-            catalog_name: str,
-            schema_name: str,
-            table_name: str
-        ) -> Dict[str, Any]:
-            """Get table metadata (Unity Catalog-like).
-            
-            Args:
-                catalog_name: Name of the catalog
-                schema_name: Name of the schema
-                table_name: Name of the table
-                
-            Returns:
-                Dictionary with table metadata
-            """
-            if not catalog_name:
-                raise ValueError("catalog_name parameter is required")
-            if not schema_name:
-                raise ValueError("schema_name parameter is required")
-            if not table_name:
-                raise ValueError("table_name parameter is required")
-            
-            return await self.catalog_manager.describe_table(
-                catalog_name, schema_name, table_name
-            )
         
         @self.mcp.add_tool
         async def search_tables(

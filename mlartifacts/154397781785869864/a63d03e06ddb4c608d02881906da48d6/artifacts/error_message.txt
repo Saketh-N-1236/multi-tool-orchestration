@@ -1,0 +1,1 @@
+500: No response from agent - assistant did not generate a final response

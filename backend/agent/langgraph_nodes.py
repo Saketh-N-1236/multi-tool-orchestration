@@ -9,7 +9,7 @@ from typing import Dict, Any, Literal
 import logging
 
 try:
-    from langchain_core.messages import BaseMessage, AIMessage
+    from langchain_core.messages import BaseMessage, AIMessage, ToolMessage, HumanMessage
     from langchain_google_genai import ChatGoogleGenerativeAI
     from langchain_core.tools import StructuredTool
     LANGCHAIN_AVAILABLE = True
@@ -17,6 +17,8 @@ except ImportError:
     LANGCHAIN_AVAILABLE = False
     ChatGoogleGenerativeAI = None
     StructuredTool = None
+    ToolMessage = None
+    HumanMessage = None
 
 from agent.langgraph_state import LangGraphAgentState
 from config.settings import get_settings
@@ -105,6 +107,44 @@ async def call_model(state: LangGraphAgentState) -> Dict[str, Any]:
         # Get messages from state
         messages = state["messages"]
         
+        # Log message history for debugging
+        logger.debug(f"call_model: Processing {len(messages)} messages")
+        for i, msg in enumerate(messages):
+            msg_type = type(msg).__name__
+            if isinstance(msg, AIMessage):
+                has_tc = bool(getattr(msg, 'tool_calls', None))
+                content_len = len(str(getattr(msg, 'content', '')))
+                logger.debug(f"  Message {i}: {msg_type}, tool_calls={has_tc}, content_len={content_len}")
+            elif isinstance(msg, ToolMessage):
+                logger.debug(f"  Message {i}: {msg_type}, tool_call_id={getattr(msg, 'tool_call_id', 'N/A')}")
+            else:
+                logger.debug(f"  Message {i}: {msg_type}")
+        
+        # CRITICAL FIX: Check if we have tool results but the last message is not asking for a response
+        # If tool results are present, add an explicit instruction to generate a final answer
+        tool_messages = [msg for msg in messages if isinstance(msg, ToolMessage)]
+        last_message_is_tool = messages and isinstance(messages[-1], ToolMessage)
+        
+        # Check if last message is already an instruction (avoid duplicates)
+        last_message_is_instruction = False
+        if messages and HumanMessage is not None:
+            try:
+                last_message_is_instruction = (
+                    isinstance(messages[-1], HumanMessage) and 
+                    "Based on the tool results" in str(messages[-1].content)
+                )
+            except Exception:
+                pass  # If HumanMessage is None or check fails, assume not an instruction
+        
+        # If we have tool results and the last message is a ToolMessage (and not already an instruction), add explicit instruction
+        if tool_messages and last_message_is_tool and not last_message_is_instruction and HumanMessage is not None:
+            # Add explicit instruction to generate final answer after tool execution
+            instruction_message = HumanMessage(
+                content="Based on the tool results above, please provide a clear and complete answer to the user's question. If you need to use more tools, use them. Otherwise, provide the final answer now."
+            )
+            messages = list(messages) + [instruction_message]
+            logger.info(f"Added explicit instruction message after {len(tool_messages)} tool results to force response generation")
+        
         # Get LLM
         llm = get_langchain_llm()
         
@@ -120,6 +160,31 @@ async def call_model(state: LangGraphAgentState) -> Dict[str, Any]:
         
         # Call LLM
         response = await llm_with_tools.ainvoke(messages)
+        
+        # Debug: Log response details
+        has_content = bool(getattr(response, 'content', None))
+        has_tool_calls = bool(getattr(response, 'tool_calls', None))
+        content_preview = str(getattr(response, 'content', ''))[:100] if has_content else "No content"
+        
+        # CRITICAL: Check if we have tool results but no content
+        tool_messages = [msg for msg in messages if isinstance(msg, ToolMessage)]
+        if tool_messages and not has_content and not has_tool_calls:
+            logger.error(
+                f"CRITICAL: Agent received {len(tool_messages)} tool results but generated "
+                f"no content and no tool_calls. This will cause the fallback response to be used."
+            )
+        elif tool_messages and not has_content and has_tool_calls:
+            logger.warning(
+                f"Agent received {len(tool_messages)} tool results and generated new tool_calls "
+                f"but no content. This may indicate the agent needs more iterations."
+            )
+        elif tool_messages and has_content:
+            logger.info(
+                f"Agent received {len(tool_messages)} tool results and generated final response "
+                f"({len(str(response.content))} chars)"
+            )
+        
+        logger.debug(f"LLM response: has_content={has_content}, has_tool_calls={has_tool_calls}, content_preview={content_preview}")
         
         # Update state with response
         # The response is an AIMessage (possibly with tool_calls)
@@ -142,8 +207,10 @@ async def call_model(state: LangGraphAgentState) -> Dict[str, Any]:
 def should_continue(state: LangGraphAgentState) -> Literal["tools", "end"]:
     """Conditional router: Determine next step based on last message.
     
-    This function checks if the last message from the LLM contains tool calls.
+    This function checks if the last AIMessage from the LLM contains tool calls.
     If it does, route to "tools" node. Otherwise, route to "end".
+    
+    CRITICAL: Only end if there's actual content (final response), not just no tool_calls.
     
     Args:
         state: Current agent state
@@ -152,17 +219,52 @@ def should_continue(state: LangGraphAgentState) -> Literal["tools", "end"]:
         "tools" if tool calls are present, "end" otherwise
     """
     messages = state["messages"]
-    last_message = messages[-1]
     
-    # Check if last message is an AIMessage with tool_calls
-    if isinstance(last_message, AIMessage):
-        # Check if the message has tool_calls
-        if hasattr(last_message, "tool_calls") and last_message.tool_calls:
-            logger.debug(
-                f"Routing to tools node: {len(last_message.tool_calls)} tool calls detected"
-            )
-            return "tools"
+    # Find the last AIMessage (not ToolMessage or other message types)
+    # After tool execution, ToolMessages are added, so we need to find the last AIMessage
+    last_ai_message = None
+    for msg in reversed(messages):
+        if isinstance(msg, AIMessage):
+            last_ai_message = msg
+            break
     
-    # No tool calls, end the graph
-    logger.debug("Routing to end: No tool calls detected")
+    # If no AIMessage found, end the graph (shouldn't happen, but safety check)
+    if not last_ai_message:
+        logger.warning("No AIMessage found in state, ending graph")
+        return "end"
+    
+    # Check if the last AIMessage has tool_calls
+    has_tool_calls = hasattr(last_ai_message, "tool_calls") and last_ai_message.tool_calls
+    
+    # CRITICAL FIX: Check if there's actual content
+    # If there are tool_calls, we need to execute them (route to tools)
+    if has_tool_calls:
+        logger.debug(
+            f"Routing to tools node: {len(last_ai_message.tool_calls)} tool calls detected"
+        )
+        return "tools"
+    
+    # No tool calls - check if we have content (final response)
+    content = getattr(last_ai_message, 'content', None)
+    has_content = bool(content) and str(content).strip()
+    
+    if has_content:
+        # We have content and no tool calls - this is a final response
+        logger.debug("Routing to end: Final response with content detected")
+        return "end"
+    
+    # No tool calls AND no content - this shouldn't happen, but if it does,
+    # we need to check if we have tool results that need processing
+    tool_messages = [msg for msg in messages if isinstance(msg, ToolMessage)]
+    if tool_messages:
+        # We have tool results but no final response - this is a problem
+        logger.error(
+            f"Agent did not generate content after {len(tool_messages)} tool results. "
+            f"This is a problem - the agent should always provide a final answer. "
+            f"Ending graph, but this will trigger fallback response."
+        )
+        return "end"
+    
+    # No tool calls, no content, no tool results - end the graph
+    logger.debug("Routing to end: No tool calls, no content, no tool results")
     return "end"

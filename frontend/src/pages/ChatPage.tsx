@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Send, Loader2, Code, Database, Search } from 'lucide-react';
+import { Send, Loader2, Code, Database, Search, Plus, Trash2, MessageSquare } from 'lucide-react';
 import { chatAPI } from '../services/api';
 import type { ChatResponse, ToolCall, ToolResult } from '../types/api';
 import './ChatPage.css';
@@ -32,6 +32,17 @@ interface ExecutionStage {
   timestamp?: string;
 }
 
+interface Session {
+  id: string;
+  name: string;
+  createdAt: number;
+  lastMessageAt: number;
+}
+
+const STORAGE_KEY_SESSIONS = 'chat_sessions';
+const STORAGE_KEY_CURRENT_SESSION = 'chat_current_session';
+const STORAGE_KEY_PREFIX = 'chat_messages_';
+
 const ChatPage = () => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
@@ -40,10 +51,171 @@ const ChatPage = () => {
   const [executionStage, setExecutionStage] = useState<ExecutionStage | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [selectedMessage, setSelectedMessage] = useState<Message | null>(null);
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const [showSessionPanel, setShowSessionPanel] = useState(false);
+
+  // Load sessions and current session from localStorage on mount
+  useEffect(() => {
+    try {
+      // Load sessions list
+      const savedSessions = localStorage.getItem(STORAGE_KEY_SESSIONS);
+      if (savedSessions) {
+        const parsedSessions = JSON.parse(savedSessions);
+        setSessions(parsedSessions);
+      } else {
+        // Create default session if none exist
+        const defaultSession: Session = {
+          id: `session_${Date.now()}`,
+          name: 'New Chat',
+          createdAt: Date.now(),
+          lastMessageAt: Date.now(),
+        };
+        setSessions([defaultSession]);
+        setSessionId(defaultSession.id);
+        localStorage.setItem(STORAGE_KEY_SESSIONS, JSON.stringify([defaultSession]));
+        localStorage.setItem(STORAGE_KEY_CURRENT_SESSION, defaultSession.id);
+      }
+
+      // Load current session
+      const currentSessionId = localStorage.getItem(STORAGE_KEY_CURRENT_SESSION);
+      if (currentSessionId) {
+        setSessionId(currentSessionId);
+        // Load messages for current session
+        const savedMessages = localStorage.getItem(`${STORAGE_KEY_PREFIX}${currentSessionId}`);
+        if (savedMessages) {
+          try {
+            const parsedMessages = JSON.parse(savedMessages);
+            // Convert timestamp strings back to Date objects
+            const messagesWithDates = parsedMessages.map((msg: any) => ({
+              ...msg,
+              timestamp: new Date(msg.timestamp),
+            }));
+            setMessages(messagesWithDates);
+          } catch (e) {
+            console.error('Failed to parse saved messages:', e);
+          }
+        }
+      } else if (sessions.length > 0) {
+        // Use first session if no current session set
+        const firstSession = sessions[0];
+        setSessionId(firstSession.id);
+        localStorage.setItem(STORAGE_KEY_CURRENT_SESSION, firstSession.id);
+      }
+    } catch (e) {
+      console.error('Failed to load sessions from localStorage:', e);
+    }
+  }, []); // Only run on mount
+
+  // Save messages to localStorage whenever they change
+  useEffect(() => {
+    if (sessionId && messages.length > 0) {
+      try {
+        localStorage.setItem(`${STORAGE_KEY_PREFIX}${sessionId}`, JSON.stringify(messages));
+      } catch (e) {
+        console.error('Failed to save messages to localStorage:', e);
+      }
+    }
+  }, [messages, sessionId]);
+
+  // Save current session ID to localStorage
+  useEffect(() => {
+    if (sessionId) {
+      localStorage.setItem(STORAGE_KEY_CURRENT_SESSION, sessionId);
+    }
+  }, [sessionId]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, executionStage]);
+
+  // Create new session
+  const createNewSession = () => {
+    const newSession: Session = {
+      id: `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      name: `Chat ${sessions.length + 1}`,
+      createdAt: Date.now(),
+      lastMessageAt: Date.now(),
+    };
+    const updatedSessions = [...sessions, newSession];
+    setSessions(updatedSessions);
+    setSessionId(newSession.id);
+    setMessages([]);
+    localStorage.setItem(STORAGE_KEY_SESSIONS, JSON.stringify(updatedSessions));
+    localStorage.setItem(STORAGE_KEY_CURRENT_SESSION, newSession.id);
+    setShowSessionPanel(false);
+  };
+
+  // Switch to a different session
+  const switchSession = (targetSessionId: string) => {
+    // Save current session messages before switching
+    if (sessionId) {
+      localStorage.setItem(`${STORAGE_KEY_PREFIX}${sessionId}`, JSON.stringify(messages));
+    }
+
+    // Load messages for target session
+    const savedMessages = localStorage.getItem(`${STORAGE_KEY_PREFIX}${targetSessionId}`);
+    if (savedMessages) {
+      try {
+        const parsedMessages = JSON.parse(savedMessages);
+        const messagesWithDates = parsedMessages.map((msg: any) => ({
+          ...msg,
+          timestamp: new Date(msg.timestamp),
+        }));
+        setMessages(messagesWithDates);
+      } catch (e) {
+        console.error('Failed to load messages for session:', e);
+        setMessages([]);
+      }
+    } else {
+      setMessages([]);
+    }
+
+    setSessionId(targetSessionId);
+    setShowSessionPanel(false);
+  };
+
+  // Delete a session
+  const deleteSession = (targetSessionId: string, e: React.MouseEvent) => {
+    e.stopPropagation(); // Prevent switching to the session when clicking delete
+
+    if (sessions.length <= 1) {
+      alert('Cannot delete the last session. Create a new one first.');
+      return;
+    }
+
+    // Remove session from list
+    const updatedSessions = sessions.filter((s) => s.id !== targetSessionId);
+    setSessions(updatedSessions);
+    localStorage.setItem(STORAGE_KEY_SESSIONS, JSON.stringify(updatedSessions));
+
+    // Remove messages from localStorage
+    localStorage.removeItem(`${STORAGE_KEY_PREFIX}${targetSessionId}`);
+
+    // If deleted session was current, switch to first available
+    if (targetSessionId === sessionId) {
+      const firstSession = updatedSessions[0];
+      switchSession(firstSession.id);
+    }
+  };
+
+  // Update session name when messages change (use first user message as name)
+  useEffect(() => {
+    if (sessionId && messages.length > 0) {
+      const firstUserMessage = messages.find((m) => m.role === 'user');
+      if (firstUserMessage) {
+        const sessionName = firstUserMessage.content.slice(0, 50) || 'New Chat';
+        setSessions((prev) => {
+          const updated = prev.map((s) =>
+            s.id === sessionId
+              ? { ...s, name: sessionName, lastMessageAt: Date.now() }
+              : s
+          );
+          localStorage.setItem(STORAGE_KEY_SESSIONS, JSON.stringify(updated));
+          return updated;
+        });
+      }
+    }
+  }, [messages, sessionId]);
 
   const handleSend = async () => {
     if (!input.trim() || loading) return;
@@ -153,9 +325,12 @@ const ChatPage = () => {
       
       setMessages((prev) => [...prev, assistantMessage]);
       
-      // Update session ID if available
+      // Update session ID if available (backend may return a session_id)
       if (response.session_id) {
         setSessionId(response.session_id);
+      } else if (sessionId) {
+        // Ensure we're using the current session_id
+        // Backend will use this for checkpointing
       }
 
       // Clear execution stage
@@ -219,9 +394,64 @@ const ChatPage = () => {
     <div className="chat-page">
       <div className="chat-container">
         <div className="chat-header">
-          <h1>Chat Assistant</h1>
-          <p>Ask questions and interact with the multi-tool orchestration system</p>
+          <div className="header-content">
+            <h1>Chat Assistant</h1>
+            <p>Ask questions and interact with the multi-tool orchestration system</p>
+          </div>
+          <div className="header-actions">
+            <button
+              className="session-button"
+              onClick={() => setShowSessionPanel(!showSessionPanel)}
+              title="Manage Sessions"
+            >
+              <MessageSquare size={20} />
+              <span>Sessions ({sessions.length})</span>
+            </button>
+            <button
+              className="new-session-button"
+              onClick={createNewSession}
+              title="New Chat"
+            >
+              <Plus size={20} />
+              <span>New Chat</span>
+            </button>
+          </div>
         </div>
+
+        {/* Session Panel */}
+        {showSessionPanel && (
+          <div className="session-panel">
+            <div className="session-panel-header">
+              <h3>Chat Sessions</h3>
+              <button className="close-button" onClick={() => setShowSessionPanel(false)}>
+                ×
+              </button>
+            </div>
+            <div className="session-list">
+              {sessions.map((session) => (
+                <div
+                  key={session.id}
+                  className={`session-item ${session.id === sessionId ? 'active' : ''}`}
+                  onClick={() => switchSession(session.id)}
+                >
+                  <div className="session-info">
+                    <div className="session-name">{session.name}</div>
+                    <div className="session-meta">
+                      {new Date(session.lastMessageAt).toLocaleDateString()}
+                    </div>
+                  </div>
+                  <button
+                    className="delete-session-button"
+                    onClick={(e) => deleteSession(session.id, e)}
+                    title="Delete Session"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div className="chat-content">
           <div className="messages-panel">

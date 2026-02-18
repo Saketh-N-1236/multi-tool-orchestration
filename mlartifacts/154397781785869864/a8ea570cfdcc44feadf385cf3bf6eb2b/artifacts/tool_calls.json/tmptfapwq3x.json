@@ -1,0 +1,15 @@
+[
+  {
+    "tool_name": "vector_search_search_documents",
+    "name": "vector_search_search_documents",
+    "params": {
+      "query": "mcp prompt"
+    },
+    "arguments": {
+      "query": "mcp prompt"
+    },
+    "id": "6781be05-6d31-41d1-862d-515d76cafa88",
+    "timestamp": "2026-02-06T13:19:40.982462",
+    "step": 0
+  }
+]

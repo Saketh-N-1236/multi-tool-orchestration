@@ -1,7 +1,31 @@
-import { useState, useEffect } from 'react';
-import { ExternalLink, RefreshCw, Database, Activity, TrendingUp, Clock, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
+import { useState, useEffect, useMemo } from 'react';
+import { ExternalLink, RefreshCw, Database, Activity, TrendingUp, Clock, CheckCircle, XCircle, AlertCircle, TrendingDown } from 'lucide-react';
+import { Line } from 'react-chartjs-2';
+import {
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  Title,
+  Tooltip,
+  Legend,
+  Filler
+} from 'chart.js';
 import { healthAPI, mlflowAPI } from '../services/api';
 import './MLLoggerPage.css';
+
+// Register Chart.js components
+ChartJS.register(
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  Title,
+  Tooltip,
+  Legend,
+  Filler
+);
 
 interface MLflowRun {
   run_id: string;
@@ -95,7 +119,8 @@ const MLLoggerPage = () => {
   };
 
   const formatTimestamp = (timestamp: number) => {
-    return new Date(timestamp / 1000).toLocaleString();
+    // MLflow returns timestamps in milliseconds, not seconds
+    return new Date(timestamp).toLocaleString();
   };
 
   const getStatusIcon = (status: string) => {
@@ -113,10 +138,194 @@ const MLLoggerPage = () => {
 
   const formatDuration = (startTime: number, endTime?: number) => {
     if (!endTime) return 'Running...';
-    const duration = (endTime - startTime) / 1000;
+    // Both startTime and endTime are in milliseconds
+    const duration = (endTime - startTime) / 1000; // Convert to seconds
     if (duration < 1) return `${(duration * 1000).toFixed(0)}ms`;
     if (duration < 60) return `${duration.toFixed(1)}s`;
     return `${(duration / 60).toFixed(1)}m`;
+  };
+
+  // Process AI Judge metrics from all runs
+  const aiJudgeData = useMemo(() => {
+    if (!experiment || !experiment.runs || experiment.runs.length === 0) {
+      return null;
+    }
+
+    // Filter runs that have AI judge metrics
+    const runsWithAIJudge = experiment.runs.filter(run => 
+      Object.keys(run.metrics).some(key => key.startsWith('ai_judge_'))
+    );
+
+    if (runsWithAIJudge.length === 0) {
+      return null;
+    }
+
+    // Sort by start_time (oldest first for trend analysis)
+    const sortedRuns = [...runsWithAIJudge].sort((a, b) => a.start_time - b.start_time);
+
+    // Extract data points for each metric
+    const metrics = ['correctness', 'relevance', 'completeness', 'tool_usage', 'overall_score'];
+    const chartData: Record<string, { labels: string[], values: number[] }> = {};
+    
+    metrics.forEach(metric => {
+      const key = `ai_judge_${metric}`;
+      chartData[metric] = {
+        labels: sortedRuns.map(run => 
+          new Date(run.start_time).toLocaleDateString('en-US', { 
+            month: 'short', 
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+          })
+        ),
+        values: sortedRuns.map(run => run.metrics[key] || 0)
+      };
+    });
+
+    // Calculate statistics
+    const stats: Record<string, {
+      average: number;
+      min: number;
+      max: number;
+      latest: number;
+      trend: 'up' | 'down' | 'stable';
+      change: number;
+    }> = {};
+
+    metrics.forEach(metric => {
+      const values = chartData[metric].values;
+      if (values.length === 0) return;
+
+      const average = values.reduce((sum, val) => sum + val, 0) / values.length;
+      const min = Math.min(...values);
+      const max = Math.max(...values);
+      const latest = values[values.length - 1];
+      
+      // Calculate trend (compare last 3 vs previous 3, or last vs first if less than 6)
+      let trend: 'up' | 'down' | 'stable' = 'stable';
+      let change = 0;
+      
+      if (values.length >= 6) {
+        const recent = values.slice(-3).reduce((sum, val) => sum + val, 0) / 3;
+        const previous = values.slice(-6, -3).reduce((sum, val) => sum + val, 0) / 3;
+        change = ((recent - previous) / previous) * 100;
+        trend = change > 2 ? 'up' : change < -2 ? 'down' : 'stable';
+      } else if (values.length >= 2) {
+        const first = values[0];
+        const last = values[values.length - 1];
+        change = ((last - first) / first) * 100;
+        trend = change > 2 ? 'up' : change < -2 ? 'down' : 'stable';
+      }
+
+      stats[metric] = {
+        average: average,
+        min: min,
+        max: max,
+        latest: latest,
+        trend: trend,
+        change: change
+      };
+    });
+
+    return {
+      chartData,
+      stats,
+      totalRuns: sortedRuns.length,
+      dateRange: {
+        start: sortedRuns[0].start_time,
+        end: sortedRuns[sortedRuns.length - 1].start_time
+      }
+    };
+  }, [experiment]);
+
+  // Chart options
+  const chartOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        position: 'top' as const,
+      },
+      title: {
+        display: false,
+      },
+      tooltip: {
+        mode: 'index' as const,
+        intersect: false,
+      },
+    },
+    scales: {
+      y: {
+        beginAtZero: true,
+        max: 1.0,
+        ticks: {
+          stepSize: 0.1,
+          callback: function(value: any) {
+            return value.toFixed(1);
+          }
+        }
+      },
+      x: {
+        ticks: {
+          maxRotation: 45,
+          minRotation: 45,
+        }
+      }
+    },
+    elements: {
+      line: {
+        tension: 0.4,
+        fill: true,
+      },
+      point: {
+        radius: 4,
+        hoverRadius: 6,
+      }
+    }
+  };
+
+  // Get chart data for a specific metric
+  const getChartData = (metric: string) => {
+    if (!aiJudgeData) return null;
+    
+    const data = aiJudgeData.chartData[metric];
+    if (!data) return null;
+
+    return {
+      labels: data.labels,
+      datasets: [
+        {
+          label: metric.charAt(0).toUpperCase() + metric.slice(1).replace(/_/g, ' '),
+          data: data.values,
+          borderColor: getMetricColor(metric),
+          backgroundColor: getMetricColor(metric, 0.1),
+          borderWidth: 2,
+          fill: true,
+        }
+      ]
+    };
+  };
+
+  const getMetricColor = (metric: string, opacity: number = 1) => {
+    const colors: Record<string, string> = {
+      correctness: `rgba(34, 197, 94, ${opacity})`,      // Green
+      relevance: `rgba(59, 130, 246, ${opacity})`,        // Blue
+      completeness: `rgba(168, 85, 247, ${opacity})`,     // Purple
+      tool_usage: `rgba(251, 146, 60, ${opacity})`,       // Orange
+      overall_score: `rgba(239, 68, 68, ${opacity})`,     // Red
+    };
+    return colors[metric] || `rgba(100, 100, 100, ${opacity})`;
+  };
+
+  const getTrendIcon = (trend: 'up' | 'down' | 'stable') => {
+    switch (trend) {
+      case 'up':
+        return <TrendingUp size={16} className="trend-up" />;
+      case 'down':
+        return <TrendingDown size={16} className="trend-down" />;
+      default:
+        return <Activity size={16} className="trend-stable" />;
+    }
   };
 
   return (
@@ -222,6 +431,109 @@ const MLLoggerPage = () => {
           </div>
         </div>
       </div>
+
+      {/* AI Judge Performance Dashboard */}
+      {aiJudgeData && (
+        <div className="ai-judge-dashboard">
+          <div className="section-header">
+            <h2>AI Judge Performance Dashboard</h2>
+            <div className="dashboard-stats">
+              <span className="stat-badge">
+                <Activity size={16} />
+                {aiJudgeData.totalRuns} Runs Analyzed
+              </span>
+              <span className="stat-badge">
+                <Clock size={16} />
+                {new Date(aiJudgeData.dateRange.start).toLocaleDateString()} - {new Date(aiJudgeData.dateRange.end).toLocaleDateString()}
+              </span>
+            </div>
+          </div>
+
+          {/* Summary Cards */}
+          <div className="summary-cards">
+            {Object.entries(aiJudgeData.stats).map(([metric, stat]) => (
+              <div key={metric} className="summary-card">
+                <div className="card-header">
+                  <h3>{metric.charAt(0).toUpperCase() + metric.slice(1).replace(/_/g, ' ')}</h3>
+                  {getTrendIcon(stat.trend)}
+                </div>
+                <div className="card-content">
+                  <div className="metric-value">
+                    <span className="latest-value">{stat.latest.toFixed(3)}</span>
+                    <span className={`change-value ${stat.trend}`}>
+                      {stat.change > 0 ? '+' : ''}{stat.change.toFixed(1)}%
+                    </span>
+                  </div>
+                  <div className="metric-stats">
+                    <div className="stat-item">
+                      <span className="stat-label">Avg:</span>
+                      <span className="stat-value">{stat.average.toFixed(3)}</span>
+                    </div>
+                    <div className="stat-item">
+                      <span className="stat-label">Min:</span>
+                      <span className="stat-value">{stat.min.toFixed(3)}</span>
+                    </div>
+                    <div className="stat-item">
+                      <span className="stat-label">Max:</span>
+                      <span className="stat-value">{stat.max.toFixed(3)}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Trend Charts */}
+          <div className="charts-container">
+            <div className="chart-section">
+              <h3>Overall Score Trend</h3>
+              <div className="chart-wrapper">
+                {getChartData('overall_score') && (
+                  <Line data={getChartData('overall_score')!} options={chartOptions} />
+                )}
+              </div>
+            </div>
+
+            <div className="charts-grid">
+              <div className="chart-section">
+                <h3>Correctness</h3>
+                <div className="chart-wrapper">
+                  {getChartData('correctness') && (
+                    <Line data={getChartData('correctness')!} options={chartOptions} />
+                  )}
+                </div>
+              </div>
+
+              <div className="chart-section">
+                <h3>Relevance</h3>
+                <div className="chart-wrapper">
+                  {getChartData('relevance') && (
+                    <Line data={getChartData('relevance')!} options={chartOptions} />
+                  )}
+                </div>
+              </div>
+
+              <div className="chart-section">
+                <h3>Completeness</h3>
+                <div className="chart-wrapper">
+                  {getChartData('completeness') && (
+                    <Line data={getChartData('completeness')!} options={chartOptions} />
+                  )}
+                </div>
+              </div>
+
+              <div className="chart-section">
+                <h3>Tool Usage</h3>
+                <div className="chart-wrapper">
+                  {getChartData('tool_usage') && (
+                    <Line data={getChartData('tool_usage')!} options={chartOptions} />
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Experiment Results Section */}
       <div className="experiment-results-section">
@@ -336,14 +648,47 @@ const MLLoggerPage = () => {
                   {Object.keys(selectedRun.metrics).length > 0 && (
                     <div className="detail-section">
                       <h4>Metrics</h4>
-                      <div className="metrics-grid">
-                        {Object.entries(selectedRun.metrics).map(([key, value]) => (
-                          <div key={key} className="metric-item">
-                            <span className="metric-key">{key}:</span>
-                            <span className="metric-value">{value.toFixed(4)}</span>
+                      
+                      {/* AI Judge Metrics Section */}
+                      {Object.keys(selectedRun.metrics).some(key => key.startsWith('ai_judge_')) && (
+                        <div className="ai-judge-metrics">
+                          <h5>AI Judge Evaluation</h5>
+                          <div className="metrics-grid">
+                            {Object.entries(selectedRun.metrics)
+                              .filter(([key]) => key.startsWith('ai_judge_'))
+                              .map(([key, value]) => {
+                                // Format metric name for display
+                                const displayName = key
+                                  .replace('ai_judge_', '')
+                                  .replace(/_/g, ' ')
+                                  .replace(/\b\w/g, l => l.toUpperCase());
+                                return (
+                                  <div key={key} className="metric-item ai-judge-metric">
+                                    <span className="metric-key">{displayName}:</span>
+                                    <span className="metric-value">{value.toFixed(4)}</span>
+                                  </div>
+                                );
+                              })}
                           </div>
-                        ))}
-                      </div>
+                        </div>
+                      )}
+                      
+                      {/* Other Metrics Section */}
+                      {Object.keys(selectedRun.metrics).some(key => !key.startsWith('ai_judge_')) && (
+                        <div className="other-metrics">
+                          <h5>Other Metrics</h5>
+                          <div className="metrics-grid">
+                            {Object.entries(selectedRun.metrics)
+                              .filter(([key]) => !key.startsWith('ai_judge_'))
+                              .map(([key, value]) => (
+                                <div key={key} className="metric-item">
+                                  <span className="metric-key">{key}:</span>
+                                  <span className="metric-value">{value.toFixed(4)}</span>
+                                </div>
+                              ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

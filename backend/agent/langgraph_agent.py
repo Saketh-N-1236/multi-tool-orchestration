@@ -9,11 +9,29 @@ from typing import Optional, AsyncIterator, Dict, Any
 import asyncio
 from datetime import datetime
 
+# Try multiple import paths for RunnableConfig (LangGraph version differences)
+RunnableConfig = None
+LANGGRAPH_CONFIG_AVAILABLE = False
+try:
+    from langgraph.graph import RunnableConfig
+    LANGGRAPH_CONFIG_AVAILABLE = True
+except ImportError:
+    try:
+        from langgraph import RunnableConfig
+        LANGGRAPH_CONFIG_AVAILABLE = True
+    except ImportError:
+        try:
+            from langchain_core.runnables import RunnableConfig
+            LANGGRAPH_CONFIG_AVAILABLE = True
+        except ImportError:
+            LANGGRAPH_CONFIG_AVAILABLE = False
+            RunnableConfig = None
+
 from agent.langgraph_state import LangGraphAgentState, create_langgraph_initial_state
 from agent.langgraph_builder import LangGraphAgentBuilder
 from agent.mcp_sdk_client import MCPSDKClient
 from agent.tool_converter import convert_mcp_tools_to_langchain
-from agent.state_converter import convert_langgraph_state_to_agent
+from agent.state_converter import convert_langgraph_state_to_agent, normalize_message_content
 from agent.prompts.loader import load_system_prompt
 from config.settings import get_settings
 
@@ -29,6 +47,7 @@ class LangGraphAgent:
         self.mcp_client: Optional[MCPSDKClient] = None
         self.graph = None
         self._initialized = False
+        self._has_checkpointer = False  # Track if graph was compiled with checkpointer
     
     async def initialize(self) -> None:
         """Initialize the agent with tools and graph."""
@@ -77,9 +96,24 @@ class LangGraphAgent:
             builder = LangGraphAgentBuilder(tools=langchain_tools)
             self.graph = builder.build()
             
+            # Check if graph was compiled with a checkpointer
+            # We need to know this to always pass config when checkpointer exists
+            try:
+                # Check if checkpointer exists and is not None
+                if hasattr(self.graph, 'checkpointer') and self.graph.checkpointer is not None:
+                    self._has_checkpointer = True
+                elif hasattr(self.graph, 'get_graph'):
+                    underlying = self.graph.get_graph()
+                    if hasattr(underlying, 'checkpointer') and underlying.checkpointer is not None:
+                        self._has_checkpointer = True
+            except Exception:
+                # If we can't detect, assume no checkpointer (will work without config)
+                self._has_checkpointer = False
+            
             self._initialized = True
             logger.info(
                 f"LangGraph agent initialized successfully with {len(langchain_tools)} tools"
+                f"{' (with checkpointing)' if self._has_checkpointer else ''}"
             )
         
         except Exception as e:
@@ -121,7 +155,20 @@ class LangGraphAgent:
         ]) if tools else "No tools available."
         system_prompt = load_system_prompt(tool_list=tool_list)
         
-        # Create initial state
+        # Create thread_id from session_id for checkpointing
+        thread_id = session_id or f"thread_{request_id}"
+        
+        # Create config with thread_id for checkpointing
+        # MUST create config if checkpointer exists, otherwise LangGraph will error
+        # Use self._has_checkpointer which is set during initialization
+        config = None
+        if LANGGRAPH_CONFIG_AVAILABLE and RunnableConfig and self._has_checkpointer:
+            # Create config with thread_id - LangGraph will automatically load previous state
+            config = RunnableConfig(configurable={"thread_id": thread_id})
+            logger.debug(f"Created config with thread_id: {thread_id} for checkpointing")
+        
+        # Create initial state - LangGraph will automatically merge with previous state from checkpoint
+        # when config is passed, so we don't need to manually load checkpoint state
         initial_state = create_langgraph_initial_state(
             user_message=user_message,
             request_id=request_id,
@@ -129,9 +176,20 @@ class LangGraphAgent:
             system_prompt=system_prompt
         )
         
-        # Invoke graph
+        # Invoke graph with config (checkpoint will save state automatically)
+        # MUST pass config if checkpointer exists, otherwise LangGraph will error
         try:
-            final_state = await self.graph.ainvoke(initial_state)
+            if config:
+                final_state = await self.graph.ainvoke(initial_state, config=config)
+            elif self._has_checkpointer:
+                # If checkpointer exists but config wasn't created, create it now
+                if LANGGRAPH_CONFIG_AVAILABLE:
+                    config = RunnableConfig(configurable={"thread_id": thread_id})
+                    final_state = await self.graph.ainvoke(initial_state, config=config)
+                else:
+                    raise RuntimeError("Checkpointer requires RunnableConfig but it's not available")
+            else:
+                final_state = await self.graph.ainvoke(initial_state)
             
             # Convert LangGraph state to custom format for compatibility
             custom_state = convert_langgraph_state_to_agent(final_state)
@@ -176,7 +234,20 @@ class LangGraphAgent:
         ]) if tools else "No tools available."
         system_prompt = load_system_prompt(tool_list=tool_list)
         
-        # Create initial state
+        # Create thread_id from session_id for checkpointing
+        thread_id = session_id or f"thread_{request_id}"
+        
+        # Create config with thread_id for checkpointing
+        # MUST create config if checkpointer exists, otherwise LangGraph will error
+        # Use self._has_checkpointer which is set during initialization
+        config = None
+        if LANGGRAPH_CONFIG_AVAILABLE and RunnableConfig and self._has_checkpointer:
+            # Create config with thread_id - LangGraph will automatically load previous state
+            config = RunnableConfig(configurable={"thread_id": thread_id})
+            logger.debug(f"Created config with thread_id: {thread_id} for checkpointing")
+        
+        # Create initial state - LangGraph will automatically merge with previous state from checkpoint
+        # when config is passed, so we don't need to manually load checkpoint state
         initial_state = create_langgraph_initial_state(
             user_message=user_message,
             request_id=request_id,
@@ -215,7 +286,29 @@ class LangGraphAgent:
             logger.info(f"Starting stream_invoke for request_id: {request_id}, message: {user_message[:50]}...")
             logger.debug(f"Initial state keys: {list(initial_state.keys())}, messages count: {len(initial_state.get('messages', []))}")
             
-            async for event in self.graph.astream(initial_state):
+            # Stream with config (checkpoint will save state automatically)
+            # MUST pass config if checkpointer exists, otherwise LangGraph will error
+            if config:
+                stream = self.graph.astream(initial_state, config=config)
+            elif self._has_checkpointer:
+                # If checkpointer exists but config wasn't created, create it now
+                if LANGGRAPH_CONFIG_AVAILABLE and RunnableConfig:
+                    config = RunnableConfig(configurable={"thread_id": thread_id})
+                    stream = self.graph.astream(initial_state, config=config)
+                else:
+                    # If RunnableConfig is not available, we can't use checkpointing
+                    # Log warning and disable checkpointing for this request
+                    logger.warning(
+                        "Checkpointer exists but RunnableConfig is not available. "
+                        "Disabling checkpointing for this request. "
+                        "Please ensure langgraph is properly installed."
+                    )
+                    # Try to stream without config (may fail, but worth trying)
+                    stream = self.graph.astream(initial_state)
+            else:
+                stream = self.graph.astream(initial_state)
+            
+            async for event in stream:
                 events_received += 1
                 logger.debug(f"Received event #{events_received}: {list(event.keys())}")
                 
@@ -308,17 +401,73 @@ class LangGraphAgent:
                 
                 logger.debug(f"Converting final_state with {len(final_state.get('messages', []))} messages")
                 
+                # Debug: Log raw LangGraph messages before conversion
+                raw_messages = final_state.get("messages", [])
+                logger.debug(f"Raw LangGraph messages count: {len(raw_messages)}")
+                for i, msg in enumerate(raw_messages):
+                    msg_type = type(msg).__name__
+                    has_content = bool(getattr(msg, 'content', None))
+                    has_tool_calls = bool(getattr(msg, 'tool_calls', None))
+                    logger.debug(f"  Message {i}: {msg_type}, has_content={has_content}, has_tool_calls={has_tool_calls}")
+                    if has_content:
+                        content_preview = str(getattr(msg, 'content', ''))[:100]
+                        logger.debug(f"    Content preview: {content_preview}")
+                
                 # Convert to custom state
                 custom_state = convert_langgraph_state_to_agent(final_state)
                 
                 # Extract final assistant message
-                assistant_messages = [m for m in reversed(custom_state.get("messages", [])) if m.get("role") == "assistant"]
+                # Look for the LAST assistant message that has content (prefer one without tool_calls)
+                messages = custom_state.get("messages", [])
+                logger.debug(f"Converted messages count: {len(messages)}")
                 final_response_text = ""
-                if assistant_messages:
-                    final_response_text = assistant_messages[0].get("content", "")
-                    logger.info(f"Extracted final response: {len(final_response_text)} characters")
-                else:
-                    logger.warning("No assistant messages found in custom_state")
+                
+                # First, try to find the last assistant message without tool_calls (final response)
+                for msg in reversed(messages):
+                    if msg.get("role") == "assistant":
+                        content = msg.get("content", "")
+                        tool_calls = msg.get("tool_calls", [])
+                        # Prefer messages without tool_calls (these are final responses)
+                        if content and not tool_calls:
+                            final_response_text = normalize_message_content(content)
+                            logger.info(f"Extracted final response (no tool_calls): {len(final_response_text)} characters")
+                            break
+                
+                # If no final response found, use the last assistant message with content
+                if not final_response_text:
+                    for msg in reversed(messages):
+                        if msg.get("role") == "assistant":
+                            content = msg.get("content", "")
+                            if content:
+                                final_response_text = normalize_message_content(content)
+                                logger.info(f"Extracted final response (with tool_calls): {len(final_response_text)} characters")
+                                break
+                
+                # If still no response, try extracting directly from raw LangGraph messages
+                if not final_response_text:
+                    logger.warning("No assistant messages with content found in custom_state, trying raw messages...")
+                    from langchain_core.messages import AIMessage
+                    for msg in reversed(raw_messages):
+                        if isinstance(msg, AIMessage):
+                            content = getattr(msg, 'content', None)
+                            tool_calls = getattr(msg, 'tool_calls', None)
+                            # Prefer messages without tool_calls
+                            if content and not tool_calls:
+                                final_response_text = normalize_message_content(content)
+                                logger.info(f"Extracted final response from raw AIMessage: {len(final_response_text)} characters")
+                                break
+                    # If still nothing, use any AIMessage with content
+                    if not final_response_text:
+                        for msg in reversed(raw_messages):
+                            if isinstance(msg, AIMessage):
+                                content = getattr(msg, 'content', None)
+                                if content:
+                                    final_response_text = normalize_message_content(content)
+                                    logger.info(f"Extracted response from raw AIMessage (with tool_calls): {len(final_response_text)} characters")
+                                    break
+                
+                if not final_response_text:
+                    logger.error("No assistant messages with content found in either custom_state or raw messages")
                 
                 # Always yield completed stage, even if response is empty
                 completed_data = {

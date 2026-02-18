@@ -80,11 +80,24 @@ export interface DocumentUploadResponse {
   collection: string;
 }
 
+export interface ToolParameter {
+  name: string;
+  type: string;
+  description: string;
+  required: boolean;
+  default?: any;
+}
+
 export interface Tool {
   name: string;
   description: string;
   server: string;
   version: string;
+  parameters?: ToolParameter[];
+  expected_output?: {
+    type: string;
+    description: string;
+  };
 }
 
 export interface HealthResponse {

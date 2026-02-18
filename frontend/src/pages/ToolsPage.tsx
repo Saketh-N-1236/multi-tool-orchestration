@@ -118,6 +118,50 @@ const ToolsPage = () => {
                       <div className="tool-version">v{tool.version}</div>
                     </div>
                     <div className="tool-description">{tool.description}</div>
+                    
+                    {/* Parameters Section */}
+                    {tool.parameters && tool.parameters.length > 0 && (
+                      <div className="tool-section">
+                        <div className="tool-section-title">
+                          <span>Parameters</span>
+                        </div>
+                        <div className="tool-parameters">
+                          {tool.parameters.map((param, pIdx) => (
+                            <div key={pIdx} className="tool-parameter">
+                              <div className="parameter-header">
+                                <span className="parameter-name">{param.name}</span>
+                                <span className={`parameter-badge ${param.required ? 'required' : 'optional'}`}>
+                                  {param.required ? 'Required' : 'Optional'}
+                                </span>
+                                <span className="parameter-type">{param.type}</span>
+                              </div>
+                              {param.description && (
+                                <div className="parameter-description">{param.description}</div>
+                              )}
+                              {param.default !== undefined && (
+                                <div className="parameter-default">Default: {JSON.stringify(param.default)}</div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    
+                    {/* Expected Output Section */}
+                    {tool.expected_output && (
+                      <div className="tool-section">
+                        <div className="tool-section-title">
+                          <span>Expected Output</span>
+                        </div>
+                        <div className="tool-output">
+                          <div className="output-type">Type: <code>{tool.expected_output.type}</code></div>
+                          {tool.expected_output.description && (
+                            <div className="output-description">{tool.expected_output.description}</div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                    
                     <div className="tool-footer">
                       <div className="tool-server">
                         <Server size={14} />

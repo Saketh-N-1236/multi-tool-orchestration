@@ -45,13 +45,41 @@ class AIJudge:
         
         Args:
             input_query: Original user query
-            expected_output: Expected answer
+            expected_output: Expected answer (empty string if not available)
             actual_output: Actual agent response
             
         Returns:
             Score between 0.0 and 1.0 (1.0 = fully correct)
         """
-        prompt = f"""You are an AI judge evaluating the correctness of an agent's response.
+        # If no expected output, evaluate based on internal consistency and factuality
+        if not expected_output or expected_output.strip() == "":
+            prompt = f"""You are an AI judge evaluating the factual correctness of an agent's response.
+
+User Query: {input_query}
+
+Agent Response: {actual_output}
+
+Evaluate if the agent's response appears to be factually correct based on:
+- Internal consistency (does the response make sense?)
+- Logical coherence (are the statements logical?)
+- Factual plausibility (do the facts seem accurate?)
+- Absence of contradictions
+
+Respond with ONLY a JSON object:
+{{
+    "score": <float between 0.0 and 1.0>,
+    "reasoning": "<brief explanation>"
+}}
+
+Score guide:
+- 1.0: Appears fully correct and consistent
+- 0.8-0.9: Mostly correct, minor issues
+- 0.6-0.7: Some correct information, but some issues
+- 0.4-0.5: Significant factual issues or contradictions
+- 0.0-0.3: Mostly incorrect or highly inconsistent
+"""
+        else:
+            prompt = f"""You are an AI judge evaluating the correctness of an agent's response.
 
 User Query: {input_query}
 
@@ -89,14 +117,30 @@ Score guide:
             response = await self.llm_provider.chat_completion(request)
             content = response.content.strip()
             
+            # Remove markdown code blocks if present
+            if content.startswith('```'):
+                # Find the first newline after ```
+                first_newline = content.find('\n')
+                if first_newline > 0:
+                    # Remove opening ```json or ```
+                    content = content[first_newline+1:]
+                # Remove closing ```
+                if content.endswith('```'):
+                    content = content[:-3]
+                content = content.strip()
+            
             # Extract JSON from response
             json_start = content.find('{')
             json_end = content.rfind('}') + 1
             if json_start >= 0 and json_end > json_start:
                 json_str = content[json_start:json_end]
-                result = json.loads(json_str)
-                score = float(result.get("score", 0.5))
-                return max(0.0, min(1.0, score))  # Clamp between 0 and 1
+                try:
+                    result = json.loads(json_str)
+                    score = float(result.get("score", 0.5))
+                    return max(0.0, min(1.0, score))  # Clamp between 0 and 1
+                except json.JSONDecodeError as e:
+                    logger.warning(f"JSON decode error: {e}, content: {json_str[:200]}")
+                    # Fall through to fallback
             
             # Fallback: try to extract score from text
             if "score" in content.lower():
@@ -106,7 +150,7 @@ Score guide:
                 if scores:
                     return float(scores[0])
             
-            logger.warning(f"Could not parse correctness score from: {content}")
+            logger.warning(f"Could not parse correctness score from: {content[:200]}")
             return 0.5  # Default neutral score
             
         except Exception as e:
@@ -163,14 +207,30 @@ Score guide:
             response = await self.llm_provider.chat_completion(request)
             content = response.content.strip()
             
+            # Remove markdown code blocks if present
+            if content.startswith('```'):
+                # Find the first newline after ```
+                first_newline = content.find('\n')
+                if first_newline > 0:
+                    # Remove opening ```json or ```
+                    content = content[first_newline+1:]
+                # Remove closing ```
+                if content.endswith('```'):
+                    content = content[:-3]
+                content = content.strip()
+            
             # Extract JSON from response
             json_start = content.find('{')
             json_end = content.rfind('}') + 1
             if json_start >= 0 and json_end > json_start:
                 json_str = content[json_start:json_end]
-                result = json.loads(json_str)
-                score = float(result.get("score", 0.5))
-                return max(0.0, min(1.0, score))
+                try:
+                    result = json.loads(json_str)
+                    score = float(result.get("score", 0.5))
+                    return max(0.0, min(1.0, score))
+                except json.JSONDecodeError as e:
+                    logger.warning(f"JSON decode error: {e}, content: {json_str[:200]}")
+                    # Fall through to fallback
             
             # Fallback
             import re
@@ -178,7 +238,7 @@ Score guide:
             if scores:
                 return float(scores[0])
             
-            logger.warning(f"Could not parse relevance score from: {content}")
+            logger.warning(f"Could not parse relevance score from: {content[:200]}")
             return 0.5
             
         except Exception as e:
@@ -195,13 +255,42 @@ Score guide:
         
         Args:
             input_query: Original user query
-            expected_output: Expected answer (may contain multiple aspects)
+            expected_output: Expected answer (may contain multiple aspects, empty if not available)
             actual_output: Actual agent response
             
         Returns:
             Score between 0.0 and 1.0 (1.0 = fully complete)
         """
-        prompt = f"""You are an AI judge evaluating the completeness of an agent's response.
+        # If no expected output, evaluate based on query complexity and response depth
+        if not expected_output or expected_output.strip() == "":
+            prompt = f"""You are an AI judge evaluating the completeness of an agent's response.
+
+User Query: {input_query}
+
+Agent Response: {actual_output}
+
+Evaluate if the agent's response adequately addresses the user's query.
+Consider:
+- Does it answer all parts of the query?
+- Is the response sufficiently detailed?
+- Are important aspects covered?
+- Does it provide enough information to be useful?
+
+Respond with ONLY a JSON object:
+{{
+    "score": <float between 0.0 and 1.0>,
+    "reasoning": "<brief explanation>"
+}}
+
+Score guide:
+- 1.0: Fully complete, comprehensively addresses the query
+- 0.8-0.9: Mostly complete, minor omissions
+- 0.6-0.7: Partially complete, some aspects missing
+- 0.4-0.5: Incomplete, significant aspects missing
+- 0.0-0.3: Very incomplete or superficial
+"""
+        else:
+            prompt = f"""You are an AI judge evaluating the completeness of an agent's response.
 
 User Query: {input_query}
 
@@ -239,14 +328,30 @@ Score guide:
             response = await self.llm_provider.chat_completion(request)
             content = response.content.strip()
             
+            # Remove markdown code blocks if present
+            if content.startswith('```'):
+                # Find the first newline after ```
+                first_newline = content.find('\n')
+                if first_newline > 0:
+                    # Remove opening ```json or ```
+                    content = content[first_newline+1:]
+                # Remove closing ```
+                if content.endswith('```'):
+                    content = content[:-3]
+                content = content.strip()
+            
             # Extract JSON from response
             json_start = content.find('{')
             json_end = content.rfind('}') + 1
             if json_start >= 0 and json_end > json_start:
                 json_str = content[json_start:json_end]
-                result = json.loads(json_str)
-                score = float(result.get("score", 0.5))
-                return max(0.0, min(1.0, score))
+                try:
+                    result = json.loads(json_str)
+                    score = float(result.get("score", 0.5))
+                    return max(0.0, min(1.0, score))
+                except json.JSONDecodeError as e:
+                    logger.warning(f"JSON decode error: {e}, content: {json_str[:200]}")
+                    # Fall through to fallback
             
             # Fallback
             import re
@@ -254,7 +359,7 @@ Score guide:
             if scores:
                 return float(scores[0])
             
-            logger.warning(f"Could not parse completeness score from: {content}")
+            logger.warning(f"Could not parse completeness score from: {content[:200]}")
             return 0.5
             
         except Exception as e:

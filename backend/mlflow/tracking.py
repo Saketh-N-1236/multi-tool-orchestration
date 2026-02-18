@@ -298,16 +298,24 @@ class MLflowTracker:
                     logger.info(f"Created MLflow experiment: {self.experiment_name} (ID: {experiment_id})")
                     mlflow.set_experiment(self.experiment_name)
                 elif experiment.lifecycle_stage == "deleted":
-                    # Experiment was deleted, create a new one with a different name
-                    new_experiment_name = f"{self.experiment_name}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
+                    # Experiment was deleted, recreate it with the same name
+                    # Don't create a new timestamped experiment - just recreate the original
                     logger.warning(
                         f"Experiment '{self.experiment_name}' was deleted. "
-                        f"Creating new experiment: {new_experiment_name}"
+                        f"Recreating with the same name."
                     )
-                    experiment_id = mlflow.create_experiment(new_experiment_name)
-                    mlflow.set_experiment(new_experiment_name)
-                    # Update the experiment name for future use
-                    self.experiment_name = new_experiment_name
+                    try:
+                        # Delete the old experiment record if possible, then create new one
+                        experiment_id = mlflow.create_experiment(self.experiment_name)
+                        mlflow.set_experiment(self.experiment_name)
+                        logger.info(f"Recreated MLflow experiment: {self.experiment_name} (ID: {experiment_id})")
+                    except Exception as recreate_error:
+                        # If recreation fails (e.g., name conflict), try with a small suffix
+                        new_experiment_name = f"{self.experiment_name}_recreated"
+                        logger.warning(f"Could not recreate '{self.experiment_name}', using '{new_experiment_name}'")
+                        experiment_id = mlflow.create_experiment(new_experiment_name)
+                        mlflow.set_experiment(new_experiment_name)
+                        self.experiment_name = new_experiment_name
                 else:
                     # Experiment exists and is active
                     mlflow.set_experiment(self.experiment_name)
@@ -519,8 +527,15 @@ class MLflowTracker:
                 
                 try:
                     if run_id:
-                        with mlflow.start_run(run_id=run_id):
+                        # Check if run is already active
+                        active_run = mlflow.active_run()
+                        if active_run and active_run.info.run_id == run_id:
+                            # Run is already active, just log the artifact
                             mlflow.log_artifact(temp_path, "tool_calls.json")
+                        else:
+                            # Run is not active, start it
+                            with mlflow.start_run(run_id=run_id):
+                                mlflow.log_artifact(temp_path, "tool_calls.json")
                     else:
                         mlflow.log_artifact(temp_path, "tool_calls.json")
                 finally:
@@ -528,6 +543,37 @@ class MLflowTracker:
             
         except Exception as e:
             logger.error(f"Error logging agent execution to MLflow: {e}", exc_info=True)
+    
+    def log_evaluation_scores(
+        self,
+        run_id: Optional[str],
+        request_id: str,
+        evaluation_scores: Dict[str, float]
+    ):
+        """Log AI judge evaluation scores as MLflow metrics.
+        
+        Args:
+            run_id: MLflow run ID
+            request_id: Request ID for correlation
+            evaluation_scores: Dictionary with evaluation scores
+                Expected keys: correctness, relevance, completeness, tool_usage, overall_score
+        """
+        if not self.enabled:
+            return
+        
+        try:
+            metrics = {
+                "ai_judge_correctness": evaluation_scores.get("correctness", 0.0),
+                "ai_judge_relevance": evaluation_scores.get("relevance", 0.0),
+                "ai_judge_completeness": evaluation_scores.get("completeness", 0.0),
+                "ai_judge_tool_usage": evaluation_scores.get("tool_usage", 0.0),
+                "ai_judge_overall_score": evaluation_scores.get("overall_score", 0.0)
+            }
+            
+            self.log_metrics(run_id, metrics)
+            logger.debug(f"Logged AI judge evaluation scores for request: {request_id}")
+        except Exception as e:
+            logger.error(f"Error logging evaluation scores to MLflow: {e}", exc_info=True)
     
     def log_llm_call(
         self,

@@ -32,6 +32,59 @@ router = APIRouter()
 settings = get_settings()
 
 
+def calculate_agent_iterations(state: AgentState) -> int:
+    """Calculate agent iterations from state.
+    
+    Each iteration represents one agent reasoning cycle:
+    - Agent processes input
+    - Optionally calls tools
+    - Produces response
+    
+    Since LangGraph doesn't automatically track current_step, we calculate
+    iterations by counting agent reasoning cycles based on:
+    - Number of tool call cycles (agent -> tools -> agent)
+    - Number of assistant messages (each represents one agent call)
+    
+    Args:
+        state: Agent state dictionary
+        
+    Returns:
+        Number of iterations (minimum 1)
+    """
+    tool_calls = state.get("tool_calls", [])
+    messages = state.get("messages", [])
+    
+    if not tool_calls:
+        # No tools used = 1 iteration (direct response)
+        return 1
+    
+    # Count assistant messages (each represents one agent reasoning cycle)
+    assistant_messages = [msg for msg in messages if msg.get("role") == "assistant"]
+    
+    if assistant_messages:
+        # Each assistant message is one iteration
+        # The first is initial reasoning, subsequent ones are after tool calls
+        return len(assistant_messages)
+    
+    # Fallback: count tool call cycles
+    # Group tool calls by step if available
+    if tool_calls and isinstance(tool_calls[0], dict):
+        steps = set()
+        for tc in tool_calls:
+            if isinstance(tc, dict):
+                step = tc.get("step", 0)
+                steps.add(step)
+        
+        # Each step represents one iteration cycle
+        # Add 1 for the final response
+        if steps:
+            return len(steps) + 1
+    
+    # Final fallback: estimate from tool calls count
+    # Assume each tool call batch is one iteration
+    return max(len(tool_calls), 1) + 1
+
+
 def validate_collection_name(collection_name: str) -> str:
     """Validate and normalize collection name for ChromaDB.
     
@@ -144,23 +197,50 @@ def format_tool_name(tool_name: str) -> str:
     
     Converts "server_tool" format to "Tool Name (Server)" format.
     
+    Known server prefixes:
+    - catalog
+    - sql_query
+    - vector_search
+    
     Args:
         tool_name: Tool name in format "server_tool" or "tool"
         
     Returns:
-        Formatted tool name like "List Tables (catalog)" or "Tool Name"
+        Formatted tool name like "Search Tables (catalog)" or "Tool Name"
     """
     if not tool_name:
         return "Unknown Tool"
     
-    # Check if it's in server_tool format
+    # Known server prefixes (in order of length, longest first to match correctly)
+    # Map server prefixes to their display names
+    server_display_names = {
+        "vector_search": "Vector Search",
+        "sql_query": "SQL Query",
+        "catalog": "Catalog"
+    }
+    server_prefixes = ["vector_search", "sql_query", "catalog"]
+    
+    # Check if tool name starts with a known server prefix
+    for server_prefix in server_prefixes:
+        if tool_name.startswith(server_prefix + "_"):
+            # Extract server and tool parts
+            tool_part = tool_name[len(server_prefix) + 1:]  # +1 for the underscore
+            # Convert tool name to title case (e.g., "search_tables" -> "Search Tables")
+            tool_formatted = tool_part.replace("_", " ").title()
+            # Get display name for server (handles special cases like "SQL Query")
+            server_formatted = server_display_names.get(server_prefix, server_prefix.replace("_", " ").title())
+            return f"{tool_formatted} ({server_formatted})"
+    
+    # If no known server prefix, try splitting on first underscore as fallback
     if "_" in tool_name:
         parts = tool_name.split("_", 1)
         if len(parts) == 2:
             server, tool = parts
-            # Convert tool name to title case (e.g., "list_tables" -> "List Tables")
+            # Convert tool name to title case
             tool_formatted = tool.replace("_", " ").title()
-            return f"{tool_formatted} ({server})"
+            # Format server name
+            server_formatted = server.replace("_", " ").title()
+            return f"{tool_formatted} ({server_formatted})"
     
     # If no server prefix, just format the tool name
     return tool_name.replace("_", " ").title()
@@ -363,19 +443,65 @@ async def chat(
                                f"Try reducing max_iterations or simplifying your query."
                     )
                 
-                # Extract final assistant message (optimized - use reversed to get last one faster)
-                assistant_messages = [m for m in reversed(state["messages"]) if m.get("role") == "assistant"]
+                # Extract final assistant message - prefer one without tool_calls (final response)
+                messages = state.get("messages", [])
+                logger.debug(f"Extracting response from {len(messages)} messages")
                 
-                if not assistant_messages:
+                # Debug: Log all assistant messages
+                assistant_msgs = [m for m in messages if m.get("role") == "assistant"]
+                logger.debug(f"Found {len(assistant_msgs)} assistant messages")
+                for i, msg in enumerate(assistant_msgs):
+                    content = msg.get("content", "")
+                    tool_calls = msg.get("tool_calls", [])
+                    logger.debug(f"  Assistant msg {i}: content_len={len(str(content))}, tool_calls={len(tool_calls) if tool_calls else 0}")
+                
+                final_response = ""
+                
+                # First, try to find the last assistant message without tool_calls (final response)
+                for msg in reversed(messages):
+                    if msg.get("role") == "assistant":
+                        content = msg.get("content", "")
+                        tool_calls = msg.get("tool_calls", [])
+                        # Prefer messages without tool_calls (these are final responses)
+                        if content and not tool_calls:
+                            final_response = normalize_content_to_string(content)
+                            break
+                
+                # If no final response found, use the last assistant message with content
+                if not final_response:
+                    for msg in reversed(messages):
+                        if msg.get("role") == "assistant":
+                            content = msg.get("content", "")
+                            if content:
+                                final_response = normalize_content_to_string(content)
+                                break
+                
+                # If still no response, try to construct one from tool results
+                if not final_response:
+                    logger.warning("No assistant message with content found, attempting to construct response from tool results")
+                    tool_results = state.get("tool_results", [])
+                    if tool_results:
+                        # Construct a basic response from tool results
+                        result_summaries = []
+                        for tr in tool_results:
+                            tool_name = tr.get("tool_name", "tool")
+                            result = tr.get("result", "")
+                            if result:
+                                result_summaries.append(f"{tool_name}: {result[:200]}")
+                        
+                        if result_summaries:
+                            final_response = "I found the following information:\n\n" + "\n\n".join(result_summaries)
+                            logger.info(f"Constructed response from {len(tool_results)} tool results: {len(final_response)} chars")
+                
+                if not final_response:
+                    # Log detailed error for debugging
+                    assistant_msgs = [m for m in messages if m.get("role") == "assistant"]
+                    logger.error(f"No response generated. Messages: {len(messages)}, Assistant messages: {len(assistant_msgs)}")
+                    logger.error(f"Tool calls: {len(state.get('tool_calls', []))}, Tool results: {len(state.get('tool_results', []))}")
                     raise HTTPException(
                         status_code=500,
-                        detail="No response from agent"
+                        detail="No response from agent - assistant did not generate a final response. Check logs for details."
                     )
-                
-                # Get the last assistant message (first in reversed list)
-                last_assistant = assistant_messages[0]
-                # Normalize content to handle list format (safety check)
-                final_response = normalize_content_to_string(last_assistant.get("content", "No response"))
                 
                 # Get tool calls and results for logging
                 tool_calls = state.get("tool_calls", [])
@@ -397,7 +523,10 @@ async def chat(
                 # Use setattr to ensure it's properly set
                 setattr(request.state, "tool_calls", tool_calls)
                 setattr(request.state, "tool_results", tool_results)
-                setattr(request.state, "iterations", state.get("current_step", 0))
+                # Calculate iterations using the same method as MLflow logging
+                # (current_step is not automatically tracked by LangGraph)
+                calculated_iterations = calculate_agent_iterations(state)
+                setattr(request.state, "iterations", calculated_iterations)
                 
                 # Store question and answer for inference logging
                 setattr(request.state, "question", request_body.message)
@@ -416,10 +545,13 @@ async def chat(
                         duration = time.time() - mlflow_start_time if mlflow_start_time else None
                         
                         # Log agent execution metrics
+                        # Calculate iterations from state (current_step is not automatically tracked by LangGraph)
+                        calculated_iterations = calculate_agent_iterations(state)
+                        
                         tracker.log_agent_execution(
                             run_id=run_id,
                             request_id=request_id,
-                            iterations=state.get("current_step", 0),
+                            iterations=calculated_iterations,
                             tool_calls=tool_calls,
                             tool_results=tool_results,
                             duration_seconds=duration,
@@ -427,6 +559,43 @@ async def chat(
                         )
                         
                         logger.debug(f"Logged agent execution to MLflow for request: {request_id}, run_id: {run_id}")
+                        
+                        # Run AI judge evaluation and log scores
+                        try:
+                            # Import from our local mlflow.evaluation module (not installed package)
+                            import importlib.util
+                            from pathlib import Path
+                            
+                            _mlflow_eval_path = Path(__file__).parent.parent / "mlflow" / "evaluation.py"
+                            _spec = importlib.util.spec_from_file_location("mlflow_evaluation_chat", _mlflow_eval_path)
+                            _mlflow_eval_module = importlib.util.module_from_spec(_spec)
+                            _spec.loader.exec_module(_mlflow_eval_module)
+                            AIJudge = _mlflow_eval_module.AIJudge
+                            
+                            judge = AIJudge()
+                            
+                            # Extract tool names from tool_calls
+                            actual_tools = [tc.get("tool_name", "") for tc in tool_calls if tc.get("tool_name")]
+                            
+                            # Evaluate response (relevance and completeness based on query)
+                            # For regular chat, we don't have expected output, so we'll evaluate:
+                            # - Relevance: How relevant is the response to the query
+                            # - Completeness: How complete is the response (based on query complexity)
+                            evaluation_scores = await judge.evaluate_response(
+                                input_query=request_body.message,
+                                expected_output="",  # No expected output for regular chat
+                                actual_output=final_response,
+                                expected_tools=None,  # No expected tools for regular chat
+                                actual_tools=actual_tools
+                            )
+                            
+                            # Log evaluation metrics to MLflow
+                            tracker.log_evaluation_scores(run_id, request_id, evaluation_scores)
+                            
+                            logger.info(f"Logged AI judge evaluation scores for request: {request_id}")
+                        except Exception as eval_error:
+                            logger.warning(f"Failed to run AI judge evaluation: {eval_error}", exc_info=True)
+                            # Don't fail the request if evaluation fails
                     except Exception as e:
                         logger.warning(f"Failed to log to MLflow: {e}", exc_info=True)
                         # Don't fail the request if MLflow logging fails
@@ -441,12 +610,9 @@ async def chat(
                     "tool_names": tool_names_used  # Alias for backward compatibility
                 }
                 
-                # Optionally append tool references to response text (if tools were used)
-                response_text = final_response
-                if tool_names_used:
-                    # Append tool references in a clear format
-                    tools_reference = f"\n\n[Tools used: {', '.join(tool_names_used)}]"
-                    response_text = final_response + tools_reference
+                # Format response - keep it clean and natural
+                # Don't append tools list to response text - the UI will display it separately
+                response_text = final_response.strip()
                 
                 # Build response
                 response = ChatResponse(
@@ -753,11 +919,46 @@ async def list_tools():
                     }
                     
                     for tool in server_tools:
+                        # Extract input schema (parameters)
+                        input_schema = {}
+                        if hasattr(tool, 'inputSchema'):
+                            input_schema = tool.inputSchema
+                        elif hasattr(tool, 'input_schema'):
+                            input_schema = tool.input_schema
+                        
+                        # Extract parameters from schema
+                        parameters = []
+                        if isinstance(input_schema, dict):
+                            properties = input_schema.get('properties', {})
+                            required = input_schema.get('required', [])
+                            
+                            for param_name, param_info in properties.items():
+                                param_type = param_info.get('type', 'string')
+                                param_desc = param_info.get('description', '')
+                                is_required = param_name in required
+                                default_value = param_info.get('default')
+                                
+                                parameters.append({
+                                    'name': param_name,
+                                    'type': param_type,
+                                    'description': param_desc,
+                                    'required': is_required,
+                                    'default': default_value
+                                })
+                        
+                        # Determine expected output type (based on tool description or schema)
+                        expected_output = {
+                            'type': 'object',  # Most tools return JSON objects
+                            'description': 'JSON object with tool-specific result fields'
+                        }
+                        
                         tools.append({
                             "name": tool.name,
                             "description": tool.description,
                             "server": server_name,
-                            "version": "1.0.0"  # MCP SDK tools don't have version in this format
+                            "version": "1.0.0",  # MCP SDK tools don't have version in this format
+                            "parameters": parameters,  # Add parameters
+                            "expected_output": expected_output  # Add expected output
                         })
                 else:
                     servers_status[server_name] = {

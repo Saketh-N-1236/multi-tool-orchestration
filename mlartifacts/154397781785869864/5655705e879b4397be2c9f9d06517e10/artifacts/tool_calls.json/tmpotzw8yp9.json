@@ -1,0 +1,56 @@
+[
+  {
+    "tool_name": "vector_search_search_documents",
+    "name": "vector_search_search_documents",
+    "params": {
+      "query": "mcp"
+    },
+    "arguments": {
+      "query": "mcp"
+    },
+    "id": "eca9927f-2f0e-4e86-8bb5-3d6c8a86aec5",
+    "timestamp": "2026-02-06T11:54:46.351215",
+    "step": 0
+  },
+  {
+    "tool_name": "catalog_search_tables",
+    "name": "catalog_search_tables",
+    "params": {
+      "query": "users"
+    },
+    "arguments": {
+      "query": "users"
+    },
+    "id": "7a4f76f5-8a2b-43fe-b0bc-3fa5f16113b7",
+    "timestamp": "2026-02-06T11:54:46.351215",
+    "step": 0
+  },
+  {
+    "tool_name": "catalog_describe_table",
+    "name": "catalog_describe_table",
+    "params": {
+      "table_name": "users"
+    },
+    "arguments": {
+      "table_name": "users"
+    },
+    "id": "4c0af4e1-5677-4cff-8b81-d791488ef014",
+    "timestamp": "2026-02-06T11:54:46.351215",
+    "step": 0
+  },
+  {
+    "tool_name": "sql_query_execute_query",
+    "name": "sql_query_execute_query",
+    "params": {
+      "query": "SELECT COUNT(id) FROM users WHERE age > 25",
+      "database": "main"
+    },
+    "arguments": {
+      "query": "SELECT COUNT(id) FROM users WHERE age > 25",
+      "database": "main"
+    },
+    "id": "5526f6a6-6db3-450b-a87b-af4a9df7de0f",
+    "timestamp": "2026-02-06T11:54:46.351215",
+    "step": 0
+  }
+]

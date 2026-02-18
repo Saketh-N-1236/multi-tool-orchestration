@@ -37,7 +37,7 @@ async def get_agent() -> LangGraphAgent:
     global _agent_instance, _agent_initialized, _agent_last_used
     
     async with _agent_lock:
-        # Check if agent exists and is still valid
+        # Check if agent exis ts and is still valid
         if _agent_instance is not None and _agent_initialized:
             # Check if agent has expired (not used for TTL period)
             if _agent_last_used:
