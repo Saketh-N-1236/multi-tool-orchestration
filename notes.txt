@@ -1,0 +1,8 @@
+Good afternoon sir , I am saketh , Vismay shared me a doc related to planon and asked me to understand the requirements for POC.
+and i gone through the document and i want to share my initial understandings for the project and need to take your insights.
+as this project is intelligent test selection, the heart of this project knowledge base and the retrival pattern.
+
+could you provide me inputs
+I think we can create a dashboard to visualise the entire flow from identify the changes to test selection.
+
+for that i need sample data that will be a test repository suite and also PR diff.
